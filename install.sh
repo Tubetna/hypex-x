@@ -131,31 +131,21 @@ if [ "$HAS_SSL" = true ]; then
     echo -e "${green}Đã tạo SSL tại /etc/V2bX/cert.crt${plain}"
 fi
 
-# 3. Tải file thực thi (Binary) từ bản gốc của tác giả
-echo -e "${yellow}Đang lấy phiên bản V2bX tùy chỉnh từ Github của anh...${plain}"
-LAST_VERSION=$(curl -Ls "https://api.github.com/repos/Tubetna/v2bx/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+# 3. Tải file thực thi (Binary) từ Github của anh
+echo -e "${yellow}Đang tải V2bX tùy chỉnh từ Github của anh...${plain}"
+BINARY_URL="https://raw.githubusercontent.com/Tubetna/v2bx/main/V2bX-linux-64.zip"
 
-if [[ ! -n "$LAST_VERSION" ]]; then
-    echo -e "${red}Lỗi: Không tìm thấy bản phát hành nào trên Github Tubetna/v2bx!${plain}"
-    echo -e "${red}Anh phải vào trang Github của mình tạo Release và đợi nó build xong đã nhé!${plain}"
-    exit 1
-fi
-
-BINARY_URL="https://github.com/Tubetna/v2bx/releases/download/${LAST_VERSION}/V2bX-linux-64.zip"
-
-echo -e "${yellow}Đang tải V2bX phiên bản ${LAST_VERSION}...${plain}"
-wget -N --no-check-certificate -O /root/V2bX-linux.zip $BINARY_URL
+wget --no-check-certificate -O /root/V2bX-linux.zip "$BINARY_URL"
 
 if [ -s "/root/V2bX-linux.zip" ]; then
     echo -e "${yellow}Đang giải nén...${plain}"
     if ! command -v unzip &> /dev/null; then
         apt-get update -y && apt-get install unzip -y || yum install unzip -y
     fi
-    unzip -o /root/V2bX-linux.zip -d /root/ > /dev/null
-    mv /root/V2bX /usr/bin/V2bX-bin/V2bX
+    unzip -o /root/V2bX-linux.zip -d /usr/bin/V2bX-bin/ > /dev/null
     rm -f /root/V2bX-linux.zip
 else
-    echo -e "${red}Lỗi: File tải về bị trống hoặc không tồn tại (Lỗi 404)!${plain}"
+    echo -e "${red}Lỗi: Không tải được file V2bX từ Github!${plain}"
     rm -f /root/V2bX-linux.zip
     exit 1
 fi
