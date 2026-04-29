@@ -132,16 +132,15 @@ if [ "$HAS_SSL" = true ]; then
 fi
 
 # 3. Tải file thực thi (Binary) từ bản gốc của tác giả
-echo -e "${yellow}Đang lấy phiên bản V2bX tùy chỉnh từ Github của anh...${plain}"
-LAST_VERSION=$(curl -Ls "https://api.github.com/repos/Tubetna/v2bx/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+echo -e "${yellow}Đang lấy phiên bản V2bX mới nhất từ Github gốc...${plain}"
+LAST_VERSION=$(curl -Ls "https://api.github.com/repos/wyx2685/V2bX/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
 if [[ ! -n "$LAST_VERSION" ]]; then
-    echo -e "${red}Lỗi: Không tìm thấy bản phát hành nào trên Github Tubetna/v2bx!${plain}"
-    echo -e "${red}Anh phải vào trang Github của mình tạo Release và đợi nó build xong đã nhé!${plain}"
+    echo -e "${red}Lỗi: Không tìm thấy bản phát hành nào!${plain}"
     exit 1
 fi
 
-BINARY_URL="https://github.com/Tubetna/v2bx/releases/download/${LAST_VERSION}/V2bX-linux-64.zip"
+BINARY_URL="https://github.com/wyx2685/V2bX/releases/download/${LAST_VERSION}/V2bX-linux-64.zip"
 
 echo -e "${yellow}Đang tải V2bX phiên bản ${LAST_VERSION}...${plain}"
 wget -N --no-check-certificate -O /root/V2bX-linux.zip $BINARY_URL
