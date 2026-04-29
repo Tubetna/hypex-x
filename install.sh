@@ -120,17 +120,22 @@ if [ "$HAS_SSL" = true ]; then
 fi
 
 # 3. Tải file thực thi (Binary)
-# LƯU Ý: Anh cần sửa link github dưới đây
-BINARY_URL="https://github.com/TÊN_GITHUB_CỦA_ANH/V2bX-dev_new/releases/latest/download/V2bX"
+BINARY_URL="https://github.com/Tubetna/v2bx/releases/latest/download/V2bX"
 
 echo -e "${yellow}Đang chuẩn bị file V2bX...${plain}"
-# wget -N --no-check-certificate -O /usr/bin/V2bX-bin/V2bX $BINARY_URL
+# Tự động tải từ Github Release của anh
+wget -N --no-check-certificate -O /usr/bin/V2bX-bin/V2bX $BINARY_URL
 
-if [ -f "/root/V2bX" ]; then
-    mv /root/V2bX /usr/bin/V2bX-bin/V2bX
-else
-    echo -e "${red}Không tìm thấy file /root/V2bX! Đảm bảo anh đã ném file build lên VPS.${plain}"
-    # exit 1 
+# Nếu tải lỗi, thử tìm file V2bX trong thư mục /root
+if [ ! -s "/usr/bin/V2bX-bin/V2bX" ]; then
+    if [ -f "/root/V2bX" ]; then
+        echo -e "${yellow}Tải qua mạng thất bại, dùng file /root/V2bX...${plain}"
+        mv /root/V2bX /usr/bin/V2bX-bin/V2bX
+    else
+        echo -e "${red}Lỗi: Không thể tải V2bX từ Github và cũng không tìm thấy file ở /root/V2bX!${plain}"
+        echo -e "${red}Vui lòng tải file V2bX (Linux) lên phần Releases của repo Tubetna/v2bx!${plain}"
+        exit 1
+    fi
 fi
 
 chmod +x /usr/bin/V2bX-bin/V2bX
