@@ -217,10 +217,10 @@ if systemctl is-active --quiet V2bX; then
     echo -e "Trạng thái: ${green}Đang chạy (Active)${plain}"
     
     # Check log để xem có kết nối panel thành công không
-    if journalctl -u V2bX -n 50 | grep -qi "Nodes started"; then
+    if journalctl -u V2bX -n 50 | grep -qi "Các Node đã khởi động xong"; then
         echo -e "Kết nối Panel: ${green}Thành công! Đã tải và thiết lập cấu hình từ Panel.${plain}"
     else
-        echo -e "Kết nối Panel: ${yellow}Đang chờ... (Chưa thấy log báo thành công, hãy gõ 'journalctl -u V2bX -f' để theo dõi)${plain}"
+        echo -e "Kết nối Panel: ${yellow}Đang chờ... (hãy gõ 'journalctl -u V2bX -f' để theo dõi)${plain}"
     fi
 else
     echo -e "Trạng thái: ${red}Thất bại (Failed/Inactive)${plain}"
@@ -228,3 +228,10 @@ else
     journalctl -u V2bX -n 10 --no-pager
 fi
 echo -e "==========================================${plain}"
+
+# 7. Cài lệnh quản lý 'v2bx'
+echo -e "\n${yellow}Đang cài lệnh quản lý 'v2bx'...${plain}"
+wget --no-check-certificate -O /usr/local/bin/v2bx \
+    "https://raw.githubusercontent.com/Tubetna/v2bx/main/v2bx.sh"
+chmod +x /usr/local/bin/v2bx
+echo -e "${green}✓ Đã cài xong! Gõ lệnh 'v2bx' bất cứ lúc nào để quản lý.${plain}"
