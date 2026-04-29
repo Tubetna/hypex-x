@@ -21,10 +21,10 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 		Interval: node.PushInterval,
 		Execute:  c.reportUserTrafficTask,
 	}
-	log.WithField("tag", c.tag).Info("Start monitor node status")
+	log.WithField("tag", c.tag).Info("Bắt đầu giám sát trạng thái Node")
 	// delay to start nodeInfoMonitor
 	_ = c.nodeInfoMonitorPeriodic.Start(false)
-	log.WithField("tag", c.tag).Info("Start report node status")
+	log.WithField("tag", c.tag).Info("Bắt đầu tác vụ báo cáo trạng thái Node")
 	_ = c.userReportPeriodic.Start(false)
 	if node.Security == panel.Tls {
 		switch c.CertConfig.CertMode {
@@ -34,7 +34,7 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 				Interval: time.Hour * 24,
 				Execute:  c.renewCertTask,
 			}
-			log.WithField("tag", c.tag).Info("Start renew cert")
+			log.WithField("tag", c.tag).Info("Bắt đầu tác vụ tự động gia hạn SSL")
 			// delay to start renewCert
 			_ = c.renewCertPeriodic.Start(true)
 		}
@@ -45,7 +45,7 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 			Interval: time.Duration(c.LimitConfig.DynamicSpeedLimitConfig.Periodic) * time.Second,
 			Execute:  c.SpeedChecker,
 		}
-		log.Printf("[%s: %d] Start dynamic speed limit", c.apiClient.NodeType, c.apiClient.NodeId)
+		log.Printf("[%s: %d] Đã kích hoạt Giới hạn tốc độ động", c.apiClient.NodeType, c.apiClient.NodeId)
 	}
 }
 
@@ -56,7 +56,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 			"err": err,
-		}).Error("Get node info failed")
+		}).Error("Lấy thông tin cấu hình Node thất bại")
 		return nil
 	}
 	// get user info
@@ -85,13 +85,13 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		}
 		c.traffic = make(map[string]int64)
 		// Remove old node
-		log.WithField("tag", c.tag).Info("Node changed, reload")
+		log.WithField("tag", c.tag).Info("Cấu hình Node thay đổi, đang nạp lại...")
 		err = c.server.DelNode(c.tag)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,
-			}).Panic("Delete node failed")
+			}).Panic("Xoá Node cũ thất bại")
 			return nil
 		}
 
@@ -135,7 +135,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,
-			}).Panic("Add node failed")
+			}).Panic("Thêm Node mới thất bại")
 			return nil
 		}
 		_, err = c.server.AddUsers(&vCore.AddUsersParams{
@@ -163,7 +163,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			c.userReportPeriodic.Close()
 			_ = c.userReportPeriodic.Start(false)
 		}
-		log.WithField("tag", c.tag).Infof("Added %d new users", len(c.userList))
+		log.WithField("tag", c.tag).Infof("Đã thêm thành công %d người dùng mới", len(c.userList))
 		// exit
 		return nil
 	}
@@ -222,7 +222,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	c.userList = newU
 	if len(added)+len(deleted) != 0 {
 		log.WithField("tag", c.tag).
-			Infof("%d user deleted, %d user added", len(deleted), len(added))
+			Infof("Đã xoá %d khách, Đã thêm %d khách mới", len(deleted), len(added))
 	}
 	return nil
 }

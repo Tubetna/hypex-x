@@ -119,23 +119,29 @@ if [ "$HAS_SSL" = true ]; then
     echo -e "${green}Đã tạo SSL tại /etc/V2bX/cert.crt${plain}"
 fi
 
-# 3. Tải file thực thi (Binary)
-BINARY_URL="https://github.com/Tubetna/v2bx/releases/latest/download/V2bX"
+# 3. Tải file thực thi (Binary) từ bản gốc của tác giả
+echo -e "${yellow}Đang lấy phiên bản V2bX tùy chỉnh từ Github của anh...${plain}"
+LAST_VERSION=$(curl -Ls "https://api.github.com/repos/Tubetna/v2bx/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
-echo -e "${yellow}Đang chuẩn bị file V2bX...${plain}"
-# Tự động tải từ Github Release của anh
-wget -N --no-check-certificate -O /usr/bin/V2bX-bin/V2bX $BINARY_URL
+if [[ ! -n "$LAST_VERSION" ]]; then
+    echo -e "${red}Lỗi: Không tìm thấy bản phát hành nào trên Github Tubetna/v2bx!${plain}"
+    echo -e "${red}Anh phải vào trang Github của mình tạo Release và đợi nó build xong đã nhé!${plain}"
+    exit 1
+fi
 
-# Nếu tải lỗi, thử tìm file V2bX trong thư mục /root
-if [ ! -s "/usr/bin/V2bX-bin/V2bX" ]; then
-    if [ -f "/root/V2bX" ]; then
-        echo -e "${yellow}Tải qua mạng thất bại, dùng file /root/V2bX...${plain}"
-        mv /root/V2bX /usr/bin/V2bX-bin/V2bX
-    else
-        echo -e "${red}Lỗi: Không thể tải V2bX từ Github và cũng không tìm thấy file ở /root/V2bX!${plain}"
-        echo -e "${red}Vui lòng tải file V2bX (Linux) lên phần Releases của repo Tubetna/v2bx!${plain}"
-        exit 1
-    fi
+BINARY_URL="https://github.com/Tubetna/v2bx/releases/download/${LAST_VERSION}/V2bX-linux-64.zip"
+
+echo -e "${yellow}Đang tải V2bX phiên bản ${LAST_VERSION}...${plain}"
+wget -N --no-check-certificate -O /root/V2bX-linux.zip $BINARY_URL
+
+if [ -f "/root/V2bX-linux.zip" ]; then
+    apt-get install unzip -y &> /dev/null || yum install unzip -y &> /dev/null
+    unzip -o /root/V2bX-linux.zip -d /root/ > /dev/null
+    mv /root/V2bX /usr/bin/V2bX-bin/V2bX
+    rm -f /root/V2bX-linux.zip
+else
+    echo -e "${red}Lỗi: Tải V2bX thất bại!${plain}"
+    exit 1
 fi
 
 chmod +x /usr/bin/V2bX-bin/V2bX

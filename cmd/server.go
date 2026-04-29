@@ -41,7 +41,7 @@ func serverHandle(_ *cobra.Command, _ []string) {
 	c := conf.New()
 	err := c.LoadFromPath(config)
 	if err != nil {
-		log.WithField("err", err).Error("Load config file failed")
+		log.WithField("err", err).Error("Tải file cấu hình thất bại")
 		return
 	}
 	switch c.LogConfig.Level {
@@ -57,31 +57,31 @@ func serverHandle(_ *cobra.Command, _ []string) {
 	if c.LogConfig.Output != "" {
 		f, err := os.OpenFile(c.LogConfig.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
-			log.WithField("err", err).Error("Open log file failed, using stdout instead")
+			log.WithField("err", err).Error("Mở file log thất bại, sẽ in trực tiếp ra màn hình")
 		}
 		log.SetOutput(f)
 	}
 	limiter.Init()
-	log.Info("Start V2bX...")
+	log.Info("Đang khởi động V2bX...")
 	vc, err := vCore.NewCore(c.CoresConfig)
 	if err != nil {
-		log.WithField("err", err).Error("new core failed")
+		log.WithField("err", err).Error("Khởi tạo Core thất bại")
 		return
 	}
 	err = vc.Start()
 	if err != nil {
-		log.WithField("err", err).Error("Start core failed")
+		log.WithField("err", err).Error("Khởi động Core thất bại")
 		return
 	}
 	defer vc.Close()
-	log.Info("Core ", vc.Type(), " started")
+	log.Info("Core ", vc.Type(), " đã khởi động thành công")
 	nodes := node.New()
 	err = nodes.Start(c.NodeConfig, vc)
 	if err != nil {
-		log.WithField("err", err).Error("Run nodes failed")
+		log.WithField("err", err).Error("Khởi chạy các Node thất bại")
 		return
 	}
-	log.Info("Nodes started")
+	log.Info("Các Node đã khởi động xong")
 	xdns := os.Getenv("XRAY_DNS_PATH")
 	sdns := os.Getenv("SING_DNS_PATH")
 	if watch {
@@ -89,30 +89,30 @@ func serverHandle(_ *cobra.Command, _ []string) {
 			nodes.Close()
 			err = vc.Close()
 			if err != nil {
-				log.WithField("err", err).Error("Restart node failed")
+				log.WithField("err", err).Error("Dừng Node thất bại để khởi động lại")
 				return
 			}
 			vc, err = vCore.NewCore(c.CoresConfig)
 			if err != nil {
-				log.WithField("err", err).Error("New core failed")
+				log.WithField("err", err).Error("Khởi tạo Core mới thất bại")
 				return
 			}
 			err = vc.Start()
 			if err != nil {
-				log.WithField("err", err).Error("Start core failed")
+				log.WithField("err", err).Error("Khởi động Core thất bại")
 				return
 			}
-			log.Info("Core ", vc.Type(), " restarted")
+			log.Info("Core ", vc.Type(), " đã được khởi động lại")
 			err = nodes.Start(c.NodeConfig, vc)
 			if err != nil {
-				log.WithField("err", err).Error("Run nodes failed")
+				log.WithField("err", err).Error("Chạy lại các Node thất bại")
 				return
 			}
-			log.Info("Nodes restarted")
+			log.Info("Các Node đã được khởi động lại")
 			runtime.GC()
 		})
 		if err != nil {
-			log.WithField("err", err).Error("start watch failed")
+			log.WithField("err", err).Error("Bật chế độ theo dõi cấu hình (Watch) thất bại")
 			return
 		}
 	}
