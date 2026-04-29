@@ -165,10 +165,30 @@ chmod +x /usr/bin/V2bX-bin/V2bX
 echo -e "${yellow}Đang tạo file cấu hình config.json...${plain}"
 cat > /etc/V2bX/config.json << EOF
 {
-  "LogConfig": {
+  "Log": {
     "Level": "info",
     "Output": ""
   },
+  "Cores": [
+    {
+      "Type": "xray",
+      "Log": {
+        "Level": "info"
+      }
+    },
+    {
+      "Type": "sing",
+      "Log": {
+        "Level": "info"
+      }
+    },
+    {
+      "Type": "hysteria2",
+      "Log": {
+        "Level": "info"
+      }
+    }
+  ],
   "Nodes": [
 ${NODES_JSON_ARRAY}
   ]
