@@ -19,12 +19,20 @@ echo -e "${green}=========================================="
 echo -e " Cài đặt V2bX - Multi-Node & Auto SSL IP"
 echo -e "==========================================${plain}"
 
-# 1. Thu thập thông tin từ người dùng
-read -p "Nhập link Panel (VD: https://panel.com): " API_HOST
-read -p "Nhập API Key của Panel: " API_KEY
+# 1. Thu thập thông tin từ người dùng (Hỗ trợ cấu hình nhanh qua lệnh export)
+if [ -z "$API_HOST" ]; then
+    read -p "Nhập link Panel (VD: https://panel.com): " API_HOST
+fi
+
+if [ -z "$API_KEY" ]; then
+    read -p "Nhập API Key của Panel: " API_KEY
+fi
 
 echo ""
-read -p "Bạn có muốn tự động tạo và cài SSL (Self-signed) cho IP máy chủ không? (y/n): " AUTO_SSL
+if [ -z "$AUTO_SSL" ]; then
+    read -p "Bạn có muốn tự động tạo và cài SSL (Self-signed) cho IP máy chủ không? (y/n): " AUTO_SSL
+fi
+
 if [[ "$AUTO_SSL" == "y" || "$AUTO_SSL" == "Y" ]]; then
     HAS_SSL=true
     echo -e "${green}==> Sẽ tự động cấu hình SSL cho các Node.${plain}"
@@ -33,7 +41,10 @@ else
 fi
 
 echo ""
-read -p "Bạn muốn chạy bao nhiêu Node trên máy chủ này? (VD: 2): " NUM_NODES
+if [ -z "$NUM_NODES" ]; then
+    read -p "Bạn muốn chạy bao nhiêu Node trên máy chủ này? (VD: 2): " NUM_NODES
+fi
+
 if ! [[ "$NUM_NODES" =~ ^[1-9][0-9]*$ ]]; then
     echo -e "${red}Số lượng không hợp lệ, mặc định sẽ tạo 1 Node.${plain}"
     NUM_NODES=1
@@ -44,16 +55,17 @@ declare -a NODE_CONFIGS
 for (( i=1; i<=NUM_NODES; i++ ))
 do
     echo -e "\n${yellow}--- Cấu hình cho Node thứ $i ---${plain}"
-    read -p "Nhập Node ID cho Node thứ $i: " NODE_ID
+    
+    read -p "Nhập Node ID cho Node thứ $i: " CURRENT_NODE_ID
 
     echo "Chọn loại Giao thức (Node Type):"
     echo "1. V2ray"
     echo "2. Trojan"
     echo "3. Shadowsocks"
     echo "4. Hysteria2"
-    read -p "Nhập số (1-4): " TYPE_CHOICE
+    read -p "Nhập số (1-4): " CURRENT_TYPE_CHOICE
 
-    case $TYPE_CHOICE in
+    case $CURRENT_TYPE_CHOICE in
         1) NODE_TYPE="V2ray"; CORE="xray" ;;
         2) NODE_TYPE="Trojan"; CORE="xray" ;;
         3) NODE_TYPE="Shadowsocks"; CORE="sing" ;;
@@ -79,7 +91,7 @@ do
       \"ApiConfig\": {
         \"ApiHost\": \"${API_HOST}\",
         \"ApiKey\": \"${API_KEY}\",
-        \"NodeID\": ${NODE_ID},
+        \"NodeID\": ${CURRENT_NODE_ID},
         \"NodeType\": \"${NODE_TYPE}\"
       },
       \"Options\": {
