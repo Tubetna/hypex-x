@@ -134,13 +134,17 @@ BINARY_URL="https://github.com/Tubetna/v2bx/releases/download/${LAST_VERSION}/V2
 echo -e "${yellow}Đang tải V2bX phiên bản ${LAST_VERSION}...${plain}"
 wget -N --no-check-certificate -O /root/V2bX-linux.zip $BINARY_URL
 
-if [ -f "/root/V2bX-linux.zip" ]; then
-    apt-get install unzip -y &> /dev/null || yum install unzip -y &> /dev/null
+if [ -s "/root/V2bX-linux.zip" ]; then
+    echo -e "${yellow}Đang giải nén...${plain}"
+    if ! command -v unzip &> /dev/null; then
+        apt-get update -y && apt-get install unzip -y || yum install unzip -y
+    fi
     unzip -o /root/V2bX-linux.zip -d /root/ > /dev/null
     mv /root/V2bX /usr/bin/V2bX-bin/V2bX
     rm -f /root/V2bX-linux.zip
 else
-    echo -e "${red}Lỗi: Tải V2bX thất bại!${plain}"
+    echo -e "${red}Lỗi: File tải về bị trống hoặc không tồn tại (Lỗi 404)!${plain}"
+    rm -f /root/V2bX-linux.zip
     exit 1
 fi
 
