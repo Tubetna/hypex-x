@@ -1,0 +1,205 @@
+# Ghi chú kỹ thuật
+
+Những thứ mất công nhất mới tìm ra, ghi lại để lần sau khỏi đào lại.
+Số dòng theo trạng thái ngày **01/09/2026**, sửa code thì kiểm lại.
+
+---
+
+## 1. Muốn thêm giao thức thì sửa ở đâu
+
+Panel có **11** loại, node chỉ dựng inbound được **8**. Bốn loại còn lại — SOCKS,
+HTTP, Naive, Mieru — muốn thêm phải viết Go, **không phải sửa script cài**.
+Script đang từ chối bốn loại đó là đúng, và báo lỗi ngay lúc cài thay vì để node
+chết lúc khởi động.
+
+### Bốn chỗ phải sửa
+
+| File | Việc |
+|---|---|
+| `api/panel/panel.go` (~dòng 59-73) | Thêm chuỗi vào switch chấp nhận `node_type`, không có là trả `unsupported Node type` |
+| `api/panel/node.go` | Parse `protocol_settings` panel gửi xuống, thêm struct vào `NodeInfo` |
+| `core/sing/node.go` | Thêm `case` dựng `option.XxxInboundOptions` — mẫu ngắn nhất là `tuic` và `anytls` (~dòng 338-357) |
+| `core/sing/user.go` | Thêm case ở **hai chỗ**: thêm user (~dòng 30-115) và xoá user (~dòng 180-200) |
+
+### Từng loại khả thi tới đâu
+
+| | Nhân sing-box `v1.13` | Panel sinh link cho khách | Đánh giá |
+|---|---|---|---|
+| **SOCKS** | ✅ `protocol/socks` | ✅ `SingBox.php` · `ClashMeta.php` | Làm được, ~nửa buổi |
+| **HTTP** | ✅ `protocol/http` | ✅ `SingBox.php` · `ClashMeta.php` | Làm được, ~nửa buổi |
+| **Naive** | ✅ `protocol/naive` | ❌ **không generator nào** | Phải viết thêm phía panel |
+| **Mieru** | ❌ **không có** | ✅ chỉ `ClashMeta.php` | Cần thư viện mới + core thứ 4 |
+
+Kiểm chứng: thư mục `protocol/` của sing-box có `socks`, `http`, `naive` nhưng
+**không có `mieru`**; `grep -ci mieru go.sum` trả về **0**.
+
+### Chỗ tưởng khó mà không khó
+
+SOCKS/HTTP/Naive xác thực bằng **username + password**, khác vmess (uuid) hay
+trojan (password). Nhưng panel đã quyết sẵn ánh xạ trong `SingBox.php`
+(`buildSocks`, `buildHttp`): **`username = password = uuid`**. Cứ theo đó là khớp
+với link khách nhận được. `ClashMeta.php::buildMieru` cũng vậy.
+
+### Vì sao Mieru đắt
+
+Không có trong sing-box lẫn xray. Phải thêm dependency `github.com/enfein/mieru`,
+dựng nguyên một core thứ tư như `core/hy2/`, rồi build lại 24 platform và kiểm thử
+từ đầu. Mà khách chỉ dùng được nếu app là Clash.Meta / mihomo — v2rayN,
+Shadowrocket, sing-box, Loon, QuantumultX, Surge, Stash đều **không có** node mieru
+trong link.
+
+### Đáng làm hơn
+
+Trước khi thêm giao thức mới, kiểm tra **VLESS + Reality** đã cấu hình đúng chưa.
+Nó không cần tên miền, vân tay TLS tốt, panel sinh link cho **cả 7** loại client, và
+node **đã chạy được rồi** — không phải viết một dòng Go nào.
+
+Reality cấu hình sai thì tụt về TLS thường mà **không báo lỗi gì** — vẫn tưởng đang
+chạy Reality.
+
+---
+
+## 2. Node dựng được gì (đã đối chiếu code, không phải đoán)
+
+| Thành phần | Ở đâu |
+|---|---|
+| Security: `None=0` `Tls=1` `Reality=2` | `api/panel/node.go:17-21` |
+| Reality — nhân xray | `core/xray/inbound.go:115-142` |
+| Reality — nhân sing | `core/sing/node.go:90-108` |
+| XTLS Vision (`flow`) | `core/xray/user.go:107` → `core/xray/vmess.go:44` |
+| XHTTP / SplitHTTP | `core/xray/inbound.go:239` |
+| Transport | tcp · ws · grpc · httpupgrade · xhttp |
+| VLESS Encryption hậu lượng tử `mlkem768x25519plus` | `core/xray/inbound.go:178` |
+
+Loại nào chạy nhân nào:
+
+- `core/xray/inbound.go:26-41` → vmess, vless, trojan, shadowsocks
+- `core/sing/node.go` → **cả 8 loại** (superset)
+- `core/hy2/` → riêng hysteria2
+
+---
+
+## 3. Giới hạn thiết bị
+
+Chuỗi hoạt động:
+
+```
+Node đếm IP → POST /api/v1/server/UniProxy/alive
+                    ↓  panel lưu Redis, TTL 300s
+Node lấy về ← GET  /api/v1/server/UniProxy/alivelist
+                    ↓
+      deviceLimit <= aliveIp  →  từ chối kết nối   (limiter/limiter.go:152-186)
+```
+
+### Cấu hình chết — đừng mất công đặt
+
+`conf/limit.go` khai báo `IPLimit` (khoá JSON là `DeviceLimit`), `ConnLimit`,
+`EnableRealtime`, `EnableIpRecorder`, `EnableDynamicSpeedLimit`. Grep toàn bộ code
+Go: **không một dòng nào đọc chúng**. Parse xong rồi nằm im.
+
+Đặt `"DeviceLimit": 3` trong `config.json` của node **không có tác dụng gì**. Số
+thiết bị đặt trong **panel**, theo Gói cước hoặc theo từng User.
+
+Panel cũng có khoá chết tương tự: `device_limit_mode` xuất hiện trong
+`ConfigController` và `ConfigSave` nhưng không nơi nào đọc để quyết định gì.
+
+### `DeviceOnlineMinTraffic` không lọc được ping
+
+`node/user.go:29-41` xây `nocountUID` **khoá theo UID**, không phải theo IP. Khách
+đang tải nặng trên máy chính thì UID không nằm trong danh sách bỏ qua, nên **mọi
+IP của khách đều được báo lên**, gồm cả IP chỉ ping vài KB. Ngưỡng này chỉ cứu khi
+khách hoàn toàn không có traffic — lúc đó cũng chẳng ai kêu.
+
+Muốn chặn ping bị tính thiết bị thì phải sửa: hoặc lọc theo IP ở node (cần đo
+traffic từng IP — chưa có), hoặc **đặt grace ở panel** (yêu cầu IP sống qua ≥2 lượt
+báo cáo mới tính) — cách này rẻ hơn hẳn vì chỉ sửa PHP, không phải build lại và cài
+lại mọi node.
+
+---
+
+## 4. Bẫy đã dính, đừng dính lại
+
+**`ETXTBSY` khi cài đè.** Linux không cho ghi lên file đang thực thi. Cài lại trên
+máy đã chạy V2bX là `install`/`cp` chết giữa chừng. Phải dừng dịch vụ rồi `rm -f`
+binary trước — `rm` chỉ cắt tên file, tiến trình cũ vẫn giữ inode nên không sập.
+
+**CRLF giết script.** File `.sh` có `\r` thì Linux báo `bad interpreter` hoặc
+`$'\r': command not found`. Editor trên Windows rất hay ghi CRLF. `.gitattributes`
+đang ép `*.sh text eol=lf` — đừng bỏ. Kiểm bằng `git show HEAD:install.sh | tr -dc
+'\r' | wc -c`, phải ra **0** (kiểm trên **blob**, không phải file trên đĩa).
+
+**`.ps1` thì ngược lại, phải có UTF-8 BOM.** Không BOM thì PowerShell 5.1 đọc theo
+codepage ANSI, chữ tiếng Việt vỡ và **script không parse nổi** — từng ra 9 lỗi cú
+pháp mà nhìn code thì không thấy sai gì.
+
+**`curl -s` không có `-f`.** HTTP 4xx/5xx vẫn exit 0 và trả chuỗi rỗng. Lấy IP
+public kiểu đó thì `CN=` của chứng chỉ trống, openssl từ chối, cài dừng. Luôn dùng
+`-fsS`.
+
+**Route mới không ăn cho tới khi reload Octane.** Panel chạy Swoole/Octane, worker
+giữ bảng route và code PHP trong RAM. Sửa file xong vẫn phải
+`php artisan octane:reload`, không thì worker chạy code cũ.
+
+**`gh` pipe qua `tail` che mất lỗi.** `gh release create ... | tail` trả exit code
+của `tail`, nên lệnh hỏng vẫn hiện `exit 0`. Đừng pipe, hoặc in `${PIPESTATUS[0]}`.
+
+**Tag cũ của repo cũ.** Sau khi làm lại lịch sử, tag `v1.0.0`/`v1.0.1` còn trỏ vào
+commit đã bỏ. `gh release create` đòi push tag đó — push là **kéo ngược 833MB
+history cũ về**. Phải `git tag -d` rồi tạo release bằng `--target main`.
+
+**VLESS từng bị gộp vào V2ray.** Menu cũ ghi "V2ray (VMess/VLESS)" chung một mục,
+mà `api/panel/panel.go:61` đổi `v2ray` → `vmess`. Kết quả: chọn VLESS thì node gửi
+lên panel `node_type=vmess`, sai loại. Giờ tách hai mục riêng.
+
+---
+
+## 5. Vị trí file — đặt sai là hỏng ngầm
+
+Geo data phải nằm cùng `config.json`, **không phải cùng binary**:
+
+- `conf/xray.go:34` — `AssetPath` mặc định `/etc/V2bX/`
+- `core/xray/xray.go:71` — `os.Setenv("XRAY_LOCATION_ASSET", c.AssetPath)`
+- nhân sing đọc `geoip.db` / `geosite.db` từ **thư mục làm việc**, cũng là `/etc/V2bX`
+
+Đặt sai chỗ thì mọi rule `geoip:` / `geosite:` từ panel đều lỗi, mà node vẫn khởi
+động bình thường nên rất khó nhận ra.
+
+Riêng hysteria2 tự cứu được: `core/hy2/geoloader.go` tự tải geo từ jsdelivr khi
+thiếu. Xray và sing thì **không**.
+
+Trên Windows `AssetPath` mặc định `/etc/V2bX/` là vô nghĩa — `install.ps1` phải ghi
+đè trỏ về thư mục cài.
+
+---
+
+## 6. Vài thứ khác đáng nhớ
+
+**Config nhận cả hai kiểu.** `conf/node.go:74-99` đọc được cả kiểu lồng
+(`ApiConfig` / `Options`) lẫn kiểu phẳng — không lo chọn sai.
+
+**Panel đổi tên loại.** `Server.php` TYPE_ALIASES map `hysteria2` → `hysteria` và
+`v2ray` → `vmess`. Nên panel chỉ có **một** mục "Hysteria" cho cả v1 và v2, phiên
+bản chọn trong protocol_settings. Nhưng node dùng **hai nhân khác nhau** — chọn
+nhầm thì node lên mà client không vào được.
+
+**Gọi API panel phải viết thường**, và `v2ray` phải đổi thành `vmess`
+(`api/panel/panel.go:58-61`). Gọi bằng `v2ray` là panel trả lỗi.
+
+**`LIKE '__xb%'` trong SQL bắt nhầm.** Dấu `_` là ký tự đại diện, phải escape
+`LIKE '\_\_xb%'`. Từng báo còn 4 tài khoản test trong khi cả 4 là khách thật.
+
+**Binary liên kết tĩnh** nên không kén glibc — chạy được cả Alpine (musl). Nhưng
+**Alpine phải `apk add bash`** trước vì script dùng mảng và `[[ ]]`.
+
+---
+
+## 7. Còn treo
+
+- [ ] **Chạy thử bộ cài trên VPS Linux thật.** Đã kiểm URL, bytes, loại binary, cú
+      pháp — nhưng bước `systemctl` và kết nối panel thì phải có máy thật mới biết.
+- [ ] Chưa thử **OpenRC trên Alpine** và **Scheduled Task trên Windows**.
+- [ ] `riscv64` có trong `build.sh` nhưng **lần build đó thất bại**, `dist/` không
+      có file. Muốn hỗ trợ thì sửa lỗi build rồi thêm vào release.
+- [ ] Cân nhắc thêm **SOCKS + HTTP** (rẻ) — xem mục 1.
+- [ ] Kiểm tra cấu hình **Reality** trên panel: SNI mượn site nào, `dest` hợp lý
+      chưa, đã bật Vision chưa.

@@ -195,6 +195,10 @@ Script tải qua `releases/latest/download/` nên **không phải sửa gì** sa
 
 ---
 
+## Ghi chú kỹ thuật
+
+[`NOTES.md`](NOTES.md) — muốn thêm giao thức thì sửa file nào, những bẫy đã dính, và việc còn treo.
+
 ## Giấy phép
 
 [MPL-2.0](LICENSE), kế thừa từ dự án gốc.
