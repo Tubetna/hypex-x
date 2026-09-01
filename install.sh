@@ -17,8 +17,8 @@ cyan='\033[0;36m'
 plain='\033[0m'
 
 # Cho phép trỏ sang GitHub Releases hoặc mirror riêng khi cần
-BASE_URL="${V2BX_BASE_URL:-https://raw.githubusercontent.com/Tubetna/v2bx/main/dist}"
-SCRIPT_URL="${V2BX_SCRIPT_URL:-https://raw.githubusercontent.com/Tubetna/v2bx/main}"
+BASE_URL="${V2BX_BASE_URL:-https://raw.githubusercontent.com/Tubetna/hypex-x/main/dist}"
+SCRIPT_URL="${V2BX_SCRIPT_URL:-https://raw.githubusercontent.com/Tubetna/hypex-x/main}"
 
 CONF_DIR="/etc/V2bX"
 BIN_DIR="/usr/bin/V2bX-bin"
@@ -192,6 +192,20 @@ echo ""
 # ==========================================
 # 1. Thu thập thông tin (bỏ qua được bằng export biến môi trường)
 # ==========================================
+# Nhận cả tên biến ngắn HXapiHost/HXapiKey lẫn API_HOST/API_KEY, để viết được
+# lệnh cài một dòng:
+#   export HXapiHost="panel.com" && export HXapiKey="KEY" && export NODE_ID=5 \
+#     && bash <(curl -Ls .../install.sh)
+API_HOST="${API_HOST:-${HXapiHost:-}}"
+API_KEY="${API_KEY:-${HXapiKey:-}}"
+
+# Đặt sẵn NODE_ID nghĩa là cài đúng một node, không hỏi gì nữa
+if [ -n "${NODE_ID}" ]; then
+    NUM_NODES=1
+    NODE_TYPE="${NODE_TYPE:-V2ray}"
+    AUTO_SSL="${AUTO_SSL:-y}"
+fi
+
 if [ -z "$API_HOST" ]; then
     read -p "Nhập link Panel (VD: https://panel.com): " API_HOST
 fi
@@ -230,26 +244,40 @@ declare -a NODE_CONFIGS
 for (( i=1; i<=NUM_NODES; i++ )); do
     echo -e "\n${yellow}--- Cấu hình cho Node thứ $i ---${plain}"
 
-    CURRENT_NODE_ID=""
-    while ! [[ "$CURRENT_NODE_ID" =~ ^[0-9]+$ ]]; do
-        read -p "Nhập Node ID cho Node thứ $i: " CURRENT_NODE_ID
-        [[ "$CURRENT_NODE_ID" =~ ^[0-9]+$ ]] || echo -e "${red}  Node ID phải là số.${plain}"
-    done
+    # Cài một dòng: NODE_ID + NODE_TYPE lấy thẳng từ biến môi trường, không hỏi
+    if [ -n "${NODE_ID}" ]; then
+        CURRENT_NODE_ID="${NODE_ID}"
+        [[ "$CURRENT_NODE_ID" =~ ^[0-9]+$ ]] || die "NODE_ID phải là số, đang nhận '${NODE_ID}'."
+    else
+        CURRENT_NODE_ID=""
+        while ! [[ "$CURRENT_NODE_ID" =~ ^[0-9]+$ ]]; do
+            read -p "Nhập Node ID cho Node thứ $i: " CURRENT_NODE_ID
+            [[ "$CURRENT_NODE_ID" =~ ^[0-9]+$ ]] || echo -e "${red}  Node ID phải là số.${plain}"
+        done
 
-    echo "Chọn loại Giao thức (Node Type):"
-    echo "1. V2ray (VMess/VLESS)"
-    echo "2. Trojan"
-    echo "3. Shadowsocks"
-    echo "4. Hysteria2"
-    read -p "Nhập số (1-4): " CURRENT_TYPE_CHOICE
+        echo "Chọn loại Giao thức (Node Type):"
+        echo "1. V2ray (VMess/VLESS)"
+        echo "2. Trojan"
+        echo "3. Shadowsocks"
+        echo "4. Hysteria2"
+        read -p "Nhập số (1-4): " CURRENT_TYPE_CHOICE
 
-    case $CURRENT_TYPE_CHOICE in
-        1) NODE_TYPE="V2ray";       CORE="xray" ;;
-        2) NODE_TYPE="Trojan";      CORE="xray" ;;
-        3) NODE_TYPE="Shadowsocks"; CORE="sing" ;;
-        4) NODE_TYPE="Hysteria2";   CORE="hysteria2" ;;
-        *) echo -e "${red}Lựa chọn không hợp lệ. Mặc định dùng V2ray (Core: xray).${plain}"
-           NODE_TYPE="V2ray"; CORE="xray" ;;
+        case $CURRENT_TYPE_CHOICE in
+            1) NODE_TYPE="V2ray" ;;
+            2) NODE_TYPE="Trojan" ;;
+            3) NODE_TYPE="Shadowsocks" ;;
+            4) NODE_TYPE="Hysteria2" ;;
+            *) echo -e "${red}Lựa chọn không hợp lệ. Mặc định dùng V2ray.${plain}"
+               NODE_TYPE="V2ray" ;;
+        esac
+    fi
+
+    case "${NODE_TYPE}" in
+        V2ray|v2ray|VMess|vmess|VLESS|vless) NODE_TYPE="V2ray";       CORE="xray" ;;
+        Trojan|trojan)                       NODE_TYPE="Trojan";      CORE="xray" ;;
+        Shadowsocks|shadowsocks|SS|ss)       NODE_TYPE="Shadowsocks"; CORE="sing" ;;
+        Hysteria2|hysteria2|hy2|HY2)         NODE_TYPE="Hysteria2";   CORE="hysteria2" ;;
+        *) die "NODE_TYPE không hợp lệ: '${NODE_TYPE}' (chỉ nhận V2ray/Trojan/Shadowsocks/Hysteria2)." ;;
     esac
 
     echo -e "${green}==> Đã tự động gán Core [ ${CORE} ] cho giao thức [ ${NODE_TYPE} ]${plain}"
@@ -464,7 +492,7 @@ if [ "${INIT_SYSTEM}" = "systemd" ]; then
     cat > /etc/systemd/system/V2bX.service << SVCEOF
 [Unit]
 Description=V2bX Service
-Documentation=https://github.com/Tubetna/v2bx
+Documentation=https://github.com/Tubetna/hypex-x
 After=network.target nss-lookup.target
 Wants=network-online.target
 

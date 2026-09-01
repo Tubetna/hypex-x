@@ -20,8 +20,8 @@ BIN_DIR="/usr/bin/V2bX-bin"
 BINARY="${BIN_DIR}/V2bX"
 CONF_DIR="/etc/V2bX"
 CONFIG="${CONF_DIR}/config.json"
-BASE_URL="${V2BX_BASE_URL:-https://raw.githubusercontent.com/Tubetna/v2bx/main/dist}"
-SCRIPT_URL="${V2BX_SCRIPT_URL:-https://raw.githubusercontent.com/Tubetna/v2bx/main}"
+BASE_URL="${V2BX_BASE_URL:-https://raw.githubusercontent.com/Tubetna/hypex-x/main/dist}"
+SCRIPT_URL="${V2BX_SCRIPT_URL:-https://raw.githubusercontent.com/Tubetna/hypex-x/main}"
 INSTALL_SCRIPT="${SCRIPT_URL}/install.sh"
 
 # ── Kiểm tra quyền root ──────────────────
@@ -128,7 +128,7 @@ show_header() {
     detect_arch
     echo -e "${cyan}╔══════════════════════════════════════════════════╗${plain}"
     echo -e "${cyan}║${white}${bold}         V2bX Manager - Quản lý V2bX             ${plain}${cyan}║${plain}"
-    echo -e "${cyan}║${plain}         https://github.com/Tubetna/v2bx          ${cyan}║${plain}"
+    echo -e "${cyan}║${plain}         https://github.com/Tubetna/hypex-x          ${cyan}║${plain}"
     echo -e "${cyan}╠══════════════════════════════════════════════════╣${plain}"
     echo -e "${cyan}║${plain}  Trạng thái : $(get_status)"
     echo -e "${cyan}║${plain}  Phiên bản  : ${yellow}$(get_version)${plain}"

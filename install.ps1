@@ -14,7 +14,7 @@
       Xem log     : .\install.ps1 -Logs
 
     Chạy nhanh từ Internet (PowerShell quyền Administrator):
-      iwr -useb https://raw.githubusercontent.com/Tubetna/v2bx/main/install.ps1 | iex
+      iwr -useb https://raw.githubusercontent.com/Tubetna/hypex-x/main/install.ps1 | iex
 #>
 
 [CmdletBinding()]
@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 $TaskName = 'V2bX'
 $BaseUrl  = $env:V2BX_BASE_URL
 if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
-    $BaseUrl = 'https://raw.githubusercontent.com/Tubetna/v2bx/main/dist'
+    $BaseUrl = 'https://raw.githubusercontent.com/Tubetna/hypex-x/main/dist'
 }
 
 $BinPath  = Join-Path $InstallDir 'V2bX.exe'
