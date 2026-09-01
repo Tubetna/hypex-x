@@ -151,6 +151,35 @@ history cũ về**. Phải `git tag -d` rồi tạo release bằng `--target mai
 mà `api/panel/panel.go:61` đổi `v2ray` → `vmess`. Kết quả: chọn VLESS thì node gửi
 lên panel `node_type=vmess`, sai loại. Giờ tách hai mục riêng.
 
+**TLS1.3 + h2 CHƯA ĐỦ để làm `dest` cho Reality.** `www.microsoft.com` có đủ cả
+hai mà vẫn không dùng được — nó đứng sau CDN xử lý bắt tay theo cách Reality không
+chuyển tiếp được. Triệu chứng rất dễ đánh lừa: client **thêm được, bắt tay xong,
+nhưng không đi được byte nào**, app báo `io: read/write on closed pipe`.
+
+Phân biệt bằng đúng một chữ trong log Xray (phải bật `"Level": "debug"` cho nhân
+xray trong `/etc/V2bX/config.json`):
+
+| Log | Nghĩa |
+|---|---|
+| `authentication failed or validation criteria not met` | Sai `pbk` hoặc `sid` — lỗi phía khoá |
+| `handshake did not complete successfully` | **Qua được xác thực rồi**, chết ở bước chuyển tiếp tới `dest` |
+
+Kiểm `dest` bằng `openssl s_client` là **vô nghĩa** — nó chỉ chứng minh openssl nói
+chuyện được với site đó, không chứng minh Reality chuyển tiếp nổi một ClientHello
+vân tay Chrome. Cách kiểm đúng: dựng Xray client thật nối vào chính node.
+
+`dl.google.com` chạy tốt. Đổi `dest` là phải đổi luôn `sni` trong link của khách.
+
+**uTLS bắt buộc với Reality.** Tắt công tắc uTLS trong panel thì `Helper::getTlsFingerprint()`
+trả `null` → không ghi `fp` vào link → client họ sing-box (NekoBox, Hiddify, Karing)
+báo `uTLS is required by reality client` (`sing-box/common/tls/reality_client.go:56`).
+Client Xray thì thường tự mặc định `chrome`, nhưng đó là may chứ không phải thiết kế.
+
+**Sửa node trong giao diện admin làm rụng group.** Lưu form một lần là `group_ids`
+chỉ còn group đang chọn trong ô. Node từng phục vụ 1224 khách tụt xuống 317, log ghi
+`Đã xoá 906 khách`. Khách không thuộc group còn lại thì **node biến mất khỏi link
+đăng ký** — nhìn giống lỗi kết nối nhưng không phải.
+
 ---
 
 ## 5. Vị trí file — đặt sai là hỏng ngầm
