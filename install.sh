@@ -256,28 +256,52 @@ for (( i=1; i<=NUM_NODES; i++ )); do
         done
 
         echo "Chọn loại Giao thức (Node Type):"
-        echo "1. V2ray (VMess/VLESS)"
-        echo "2. Trojan"
-        echo "3. Shadowsocks"
-        echo "4. Hysteria2"
-        read -p "Nhập số (1-4): " CURRENT_TYPE_CHOICE
+        echo "  1. VMess          (nhân xray)"
+        echo "  2. VLESS          (nhân xray)"
+        echo "  3. Trojan         (nhân xray)"
+        echo "  4. Shadowsocks    (nhân sing)"
+        echo "  5. Hysteria2      (nhân hysteria2)"
+        echo "  6. Hysteria v1    (nhân sing)"
+        echo "  7. TUIC           (nhân sing)"
+        echo "  8. AnyTLS         (nhân sing)"
+        read -p "Nhập số (1-8): " CURRENT_TYPE_CHOICE
 
         case $CURRENT_TYPE_CHOICE in
-            1) NODE_TYPE="V2ray" ;;
-            2) NODE_TYPE="Trojan" ;;
-            3) NODE_TYPE="Shadowsocks" ;;
-            4) NODE_TYPE="Hysteria2" ;;
-            *) echo -e "${red}Lựa chọn không hợp lệ. Mặc định dùng V2ray.${plain}"
-               NODE_TYPE="V2ray" ;;
+            1) NODE_TYPE="VMess" ;;
+            2) NODE_TYPE="VLESS" ;;
+            3) NODE_TYPE="Trojan" ;;
+            4) NODE_TYPE="Shadowsocks" ;;
+            5) NODE_TYPE="Hysteria2" ;;
+            6) NODE_TYPE="Hysteria" ;;
+            7) NODE_TYPE="TUIC" ;;
+            8) NODE_TYPE="AnyTLS" ;;
+            *) echo -e "${red}Lựa chọn không hợp lệ. Mặc định dùng VMess.${plain}"
+               NODE_TYPE="VMess" ;;
         esac
     fi
 
-    case "${NODE_TYPE}" in
-        V2ray|v2ray|VMess|vmess|VLESS|vless) NODE_TYPE="V2ray";       CORE="xray" ;;
-        Trojan|trojan)                       NODE_TYPE="Trojan";      CORE="xray" ;;
-        Shadowsocks|shadowsocks|SS|ss)       NODE_TYPE="Shadowsocks"; CORE="sing" ;;
-        Hysteria2|hysteria2|hy2|HY2)         NODE_TYPE="Hysteria2";   CORE="hysteria2" ;;
-        *) die "NODE_TYPE không hợp lệ: '${NODE_TYPE}' (chỉ nhận V2ray/Trojan/Shadowsocks/Hysteria2)." ;;
+    # Loại nào chạy trên nhân nào — theo đúng bảng dispatch trong mã nguồn:
+    #   core/xray/inbound.go : vmess, vless, trojan, shadowsocks
+    #   core/sing/node.go    : cả 8 loại (superset)
+    #   core/hy2             : riêng hysteria2
+    NODE_TYPE_LC=$(echo "${NODE_TYPE}" | tr 'A-Z' 'a-z')
+    case "${NODE_TYPE_LC}" in
+        vmess|v2ray)             NODE_TYPE="VMess";       CORE="xray" ;;
+        vless)                   NODE_TYPE="VLESS";       CORE="xray" ;;
+        trojan)                  NODE_TYPE="Trojan";      CORE="xray" ;;
+        shadowsocks|ss)          NODE_TYPE="Shadowsocks"; CORE="sing" ;;
+        hysteria2|hy2)           NODE_TYPE="Hysteria2";   CORE="hysteria2" ;;
+        hysteria|hysteria1|hy)   NODE_TYPE="Hysteria";    CORE="sing" ;;
+        tuic)                    NODE_TYPE="TUIC";        CORE="sing" ;;
+        anytls)                  NODE_TYPE="AnyTLS";      CORE="sing" ;;
+        socks|naive|http|mieru)
+            die "V2bX không chạy được loại '${NODE_TYPE}'.
+    Panel có sẵn loại này nhưng V2bX không có nhân dựng inbound cho nó
+    (api/panel/panel.go chỉ nhận 8 loại). Chọn loại khác, hoặc dùng
+    phần mềm node khác cho riêng node đó." ;;
+        *)
+            die "NODE_TYPE không hợp lệ: '${NODE_TYPE}'.
+    Chỉ nhận: VMess, VLESS, Trojan, Shadowsocks, Hysteria2, Hysteria, TUIC, AnyTLS" ;;
     esac
 
     echo -e "${green}==> Đã tự động gán Core [ ${CORE} ] cho giao thức [ ${NODE_TYPE} ]${plain}"

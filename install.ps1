@@ -22,7 +22,7 @@ param(
     [string] $ApiHost,
     [string] $ApiKey,
     [int]    $NodeId,
-    [ValidateSet('V2ray', 'Trojan', 'Shadowsocks', 'Hysteria2')]
+    [ValidateSet('VMess', 'VLESS', 'Trojan', 'Shadowsocks', 'Hysteria2', 'Hysteria', 'TUIC', 'AnyTLS', 'V2ray')]
     [string] $NodeType,
     [string] $InstallDir = 'C:\V2bX',
     [switch] $AutoSsl,
@@ -172,11 +172,21 @@ function New-Config {
 
     $nodeBlocks = @()
     foreach ($n in $Nodes) {
+        # Loại nào chạy trên nhân nào — theo bảng dispatch trong mã nguồn V2bX:
+        #   core/xray/inbound.go : vmess, vless, trojan, shadowsocks
+        #   core/sing/node.go    : cả 8 loại (superset)
+        #   core/hy2             : riêng hysteria2
         $core = switch ($n.Type) {
+            'VMess'       { 'xray' }
             'V2ray'       { 'xray' }
+            'VLESS'       { 'xray' }
             'Trojan'      { 'xray' }
             'Shadowsocks' { 'sing' }
             'Hysteria2'   { 'hysteria2' }
+            'Hysteria'    { 'sing' }
+            'TUIC'        { 'sing' }
+            'AnyTLS'      { 'sing' }
+            default       { 'sing' }
         }
         $cert = ''
         if ($UseSsl) {
@@ -403,7 +413,7 @@ if (-not $PSBoundParameters.ContainsKey('AutoSsl') -and -not $NodeId) {
 
 $nodes = @()
 if ($NodeId -gt 0) {
-    if ([string]::IsNullOrWhiteSpace($NodeType)) { $NodeType = 'V2ray' }
+    if ([string]::IsNullOrWhiteSpace($NodeType)) { $NodeType = 'VMess' }
     $nodes += [pscustomobject]@{ Id = $NodeId; Type = $NodeType }
 } else {
     $num = Read-Host 'Bạn muốn chạy bao nhiêu Node trên máy này? (VD: 2)'
@@ -424,17 +434,25 @@ if ($NodeId -gt 0) {
         }
 
         Write-Host 'Chọn loại Giao thức (Node Type):'
-        Write-Host '  1. V2ray (VMess/VLESS)'
-        Write-Host '  2. Trojan'
-        Write-Host '  3. Shadowsocks'
-        Write-Host '  4. Hysteria2'
-        $c = Read-Host 'Nhập số (1-4)'
+        Write-Host '  1. VMess          (nhân xray)'
+        Write-Host '  2. VLESS          (nhân xray)'
+        Write-Host '  3. Trojan         (nhân xray)'
+        Write-Host '  4. Shadowsocks    (nhân sing)'
+        Write-Host '  5. Hysteria2      (nhân hysteria2)'
+        Write-Host '  6. Hysteria v1    (nhân sing)'
+        Write-Host '  7. TUIC           (nhân sing)'
+        Write-Host '  8. AnyTLS         (nhân sing)'
+        $c = Read-Host 'Nhập số (1-8)'
         $t = switch ($c) {
-            '1' { 'V2ray' }
-            '2' { 'Trojan' }
-            '3' { 'Shadowsocks' }
-            '4' { 'Hysteria2' }
-            default { Write-Warn 'Lựa chọn không hợp lệ, dùng V2ray.'; 'V2ray' }
+            '1' { 'VMess' }
+            '2' { 'VLESS' }
+            '3' { 'Trojan' }
+            '4' { 'Shadowsocks' }
+            '5' { 'Hysteria2' }
+            '6' { 'Hysteria' }
+            '7' { 'TUIC' }
+            '8' { 'AnyTLS' }
+            default { Write-Warn 'Lựa chọn không hợp lệ, dùng VMess.'; 'VMess' }
         }
         $nodes += [pscustomobject]@{ Id = $id; Type = $t }
     }
