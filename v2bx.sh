@@ -455,6 +455,17 @@ gen_le_ssl() {
             svc stop &>/dev/null && stopped=true
             sleep 2
         fi
+        # Cổng 80 có thể do tiến trình khác giữ (xray rời, nginx, XrayR...),
+        # dừng V2bX không giải phóng được. Báo rõ tên tiến trình cho khỏi mò.
+        if ss -lnt 2>/dev/null | grep -q ':80 '; then
+            local holder
+            holder=$(ss -lntp 2>/dev/null | awk '$4 ~ /:80$/ {print $NF; exit}')
+            echo -e "${red}Cổng 80 vẫn đang bị chiếm: ${holder:-không rõ tiến trình}${plain}"
+            echo -e "${yellow}Dừng tiến trình đó rồi chạy lại, hoặc dùng Cloudflare API Token${plain}"
+            echo -e "${yellow}để xác thực qua DNS (không cần cổng 80).${plain}"
+            [ "$stopped" = true ] && svc start &>/dev/null
+            press_any_key; return
+        fi
         echo -e "${yellow}Đang xin chứng chỉ cho ${domain} (xác thực qua cổng 80)...${plain}"
         "$acme" --issue --standalone -d "$domain" --keylength ec-256 && issued=true
         [ "$stopped" = true ] && svc start &>/dev/null

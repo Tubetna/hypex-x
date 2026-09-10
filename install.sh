@@ -76,6 +76,17 @@ issue_le_cert() {
             eval "$(svc_cmd stop)" &>/dev/null && stopped=true
             sleep 2
         fi
+        # Cong 80 co the do tien trinh khac giu (xray roi, nginx, XrayR...),
+        # dung V2bX khong giai phong duoc. Bao ro ten tien trinh cho khoi mo.
+        if ss -lnt 2>/dev/null | grep -q ':80 '; then
+            local holder
+            holder=$(ss -lntp 2>/dev/null | awk '$4 ~ /:80$/ {print $NF; exit}')
+            echo -e "${red}Cổng 80 vẫn đang bị chiếm: ${holder:-không rõ tiến trình}${plain}"
+            echo -e "${yellow}Dừng tiến trình đó rồi chạy lại, hoặc dùng Cloudflare API Token${plain}"
+            echo -e "${yellow}để xác thực qua DNS (không cần cổng 80).${plain}"
+            [ "$stopped" = true ] && eval "$(svc_cmd start)" &>/dev/null
+            return 1
+        fi
         echo -e "${yellow}Đang xin chứng chỉ cho ${domain} (xác thực qua cổng 80)...${plain}"
         "$acme" --issue --standalone -d "$domain" --keylength ec-256 && issued=true
         [ "$stopped" = true ] && eval "$(svc_cmd start)" &>/dev/null

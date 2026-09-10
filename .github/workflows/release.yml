@@ -109,6 +109,16 @@ jobs:
         id: get_filename
         run: |
           export _NAME=$(jq ".[\"$GOOS-$GOARCH$GOARM$GOMIPS\"].friendlyName" -r < .github/build/friendly-filenames.json)
+          # install.sh / install.ps1 tai file theo ten kien truc cua rieng chung,
+          # khac vai cho so voi friendlyName. Khong doi lai thi moi lan cai deu 404.
+          case "$_NAME" in
+            linux-64)        _NAME=linux-amd64 ;;
+            linux-32)        _NAME=linux-386 ;;
+            linux-arm64-v8a) _NAME=linux-arm64 ;;
+            linux-arm32-v7a) _NAME=linux-arm32-v7 ;;
+            windows-64)      _NAME=windows-amd64 ;;
+            windows-32)      _NAME=windows-386 ;;
+          esac
           echo "GOOS: $GOOS, GOARCH: $GOARCH, GOARM: $GOARM, GOMIPS: $GOMIPS, RELEASE_NAME: $_NAME"
           echo "ASSET_NAME=$_NAME" >> $GITHUB_OUTPUT
           echo "ASSET_NAME=$_NAME" >> $GITHUB_ENV
