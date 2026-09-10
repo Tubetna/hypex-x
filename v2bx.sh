@@ -292,7 +292,33 @@ status_v2bx() {
     else
         rc-service $SERVICE status
     fi
+    check_port_rivals
     press_any_key
+}
+
+# Linux cho nhieu tien trinh cung bind mot cong (SO_REUSEPORT) ma khong bao loi,
+# nhung ket noi vao bi chia ngau nhien. Da gap tren 4 may: XrayR / x-ui chay song
+# song V2bX, Node chi nhan duoc mot phan traffic, phan con lai roi vao tien trinh
+# sai roi chet — ma khong co dau hieu gi trong log.
+check_port_rivals() {
+    local rivals="" port proc
+    for port in 80 443; do
+        while read -r proc; do
+            case "$proc" in
+                ""|*V2bX*) continue ;;
+                *) rivals="${rivals}\n   cổng ${port}: ${proc}" ;;
+            esac
+        done <<< "$(ss -lntp 2>/dev/null | awk -v p=":${port}\$" '$4 ~ p {print $NF}' | sort -u)"
+    done
+    if [ -n "$rivals" ]; then
+        echo -e "\n${red}⚠ Có tiến trình khác đang giữ cổng của Node:${plain}"
+        echo -e "${yellow}${rivals}${plain}"
+        echo -e "${yellow}Kết nối của khách sẽ bị chia ngẫu nhiên với nó. Nên dừng hẳn:${plain}"
+        echo -e "${cyan}   systemctl stop XrayR && systemctl disable XrayR${plain}"
+        echo -e "${cyan}   systemctl stop x-ui  && systemctl disable x-ui${plain}"
+    else
+        echo -e "\n${green}✓ Cổng 80/443 không bị tiến trình nào khác giành.${plain}"
+    fi
 }
 
 log_v2bx() {

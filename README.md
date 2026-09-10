@@ -207,6 +207,8 @@ Script tải qua `releases/latest/download/` nên **không phải sửa gì** sa
   - **CloudFront** từ chối thẳng origin HTTPS không có chứng chỉ hợp lệ;
   - **Cloudflare** không chịu tải luồng dài (XHTTP `stream-one`) qua origin dùng chứng chỉ tự ký — node trả `400`.
 - **Chứng chỉ tự ký theo IP**: chỉ dùng khi test, và phải bật `allowInsecure` cho node đó trên panel (client cũ mới chấp nhận).
+- **Nhiều tiến trình cùng giữ một cổng**: Linux cho phép việc đó (`SO_REUSEPORT`) mà **không báo lỗi gì**, nhưng kết nối của khách bị chia ngẫu nhiên — Node chỉ nhận được một phần, phần còn lại rơi vào tiến trình sai rồi chết, và log không có dấu hiệu nào. Đã gặp trên 4 máy: `XrayR` hoặc `x-ui` chạy song song `V2bX`. Script giờ cảnh báo sau khi cài, và menu **7** kiểm tra được bất cứ lúc nào. Cách xử lý là dừng hẳn tiến trình kia (`systemctl stop … && systemctl disable …`), không phải chỉ `kill` — systemd sẽ bật lại ngay.
+- **Chứng chỉ đã có sẵn trên máy**: script tự dò `/root/.acme.sh` và đề nghị dùng lại nếu còn hạn, khỏi phải xin mới.
 - **Tường lửa**: script cảnh báo khi `firewalld` hoặc `ufw` đang bật. Mở cổng bằng menu **12**, hoặc `firewall-cmd --permanent --add-port=<cổng>/tcp --add-port=<cổng>/udp && firewall-cmd --reload`.
 - **Cài lại đè lên bản đang chạy**: script tự dừng dịch vụ trước khi ghi đè. Linux không cho ghi lên file đang thực thi (`ETXTBSY`).
 - **Windows Defender** có thể chặn `V2bX.exe` — thêm loại trừ cho thư mục cài đặt.

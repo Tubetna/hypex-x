@@ -44,6 +44,21 @@ svc_cmd() {
     fi
 }
 
+# Tim chung chi acme.sh da co san va con han tren may.
+# Box Nhat (160.16.60.76) tung co cert that nam san o /root/.acme.sh nhung bo cai
+# van tao cert tu ky de len, roi node 443 chet vi client tu choi cert tu ky.
+find_existing_cert() {
+    local f d
+    for f in /root/.acme.sh/*_ecc/fullchain.cer /root/.acme.sh/*/fullchain.cer; do
+        [ -s "$f" ] || continue
+        # con han it nhat 7 ngay thi moi tinh
+        openssl x509 -in "$f" -noout -checkend 604800 &>/dev/null || continue
+        d=$(basename "$(dirname "$f")"); d="${d%_ecc}"
+        echo "$d"; return 0
+    done
+    return 1
+}
+
 issue_le_cert() {
     local domain="$1" cf_token="$2"
     [ -z "$domain" ] && { echo -e "${red}Chưa nhập tên miền.${plain}"; return 1; }
@@ -325,10 +340,15 @@ elif [ -n "$AUTO_SSL" ]; then
     # Giữ tương thích ngược với biến AUTO_SSL cũ (y = cert tự ký theo IP)
     [[ "$AUTO_SSL" =~ ^[yY] ]] && SSL_MODE=2 || SSL_MODE=3
 else
+    FOUND_CERT=$(find_existing_cert 2>/dev/null || true)
     echo -e "${cyan}Chọn kiểu chứng chỉ SSL cho Node:${plain}"
     echo -e "  ${green}1.${plain} Cert thật Let's Encrypt theo tên miền ${green}(khuyên dùng cho cổng 443)${plain}"
-    echo -e "  ${yellow}2.${plain} Cert tự ký theo IP  ${yellow}(chỉ dùng được khi Panel bật allowInsecure)${plain}"
+    echo -e "  ${yellow}2.${plain} Cert tự ký theo IP  ${yellow}(client xray 26.x trở lên sẽ từ chối)${plain}"
     echo -e "  ${blue}3.${plain} Bỏ qua, không tạo chứng chỉ"
+    if [ -n "$FOUND_CERT" ]; then
+        echo -e "${green}  → Máy này đã có chứng chỉ còn hạn cho ${FOUND_CERT}${plain}"
+        echo -e "${green}    Chọn 1 rồi Enter là dùng lại luôn, không phải xin mới.${plain}"
+    fi
     read -p "Nhập số (1-3) [mặc định 1]: " SSL_MODE
     SSL_MODE="${SSL_MODE:-1}"
 fi
@@ -339,7 +359,12 @@ case "$SSL_MODE" in
     1)
         USE_LE=true
         if [ -z "$SSL_DOMAIN" ]; then
-            read -p "Nhập tên miền trỏ về máy này (VD: node1.domain.com): " SSL_DOMAIN
+            if [ -n "$FOUND_CERT" ]; then
+                read -p "Nhập tên miền [Enter = dùng lại ${FOUND_CERT}]: " SSL_DOMAIN
+                SSL_DOMAIN="${SSL_DOMAIN:-$FOUND_CERT}"
+            else
+                read -p "Nhập tên miền trỏ về máy này (VD: node1.domain.com): " SSL_DOMAIN
+            fi
         fi
         [ -z "$SSL_DOMAIN" ] && die "Chưa nhập tên miền cho chứng chỉ."
         if [ -z "$CF_TOKEN" ]; then
@@ -505,7 +530,10 @@ if [ "$HAS_SSL" = true ]; then
         || die "Tạo chứng chỉ SSL thất bại."
     chmod 600 "${CONF_DIR}/private.key"
     echo -e "${green}Đã tạo SSL cho IP ${SERVER_IP} tại ${CONF_DIR}/cert.crt${plain}"
-    echo -e "${yellow}  Lưu ý: cert tự ký cho IP — trên Panel phải bật 'allowInsecure' cho node này.${plain}"
+    echo -e "${yellow}  Lưu ý: đây là cert tự ký. Client xray 26.x trở lên KHÔNG chấp nhận nữa${plain}"
+    echo -e "${yellow}  ('allowInsecure' đã bị xoá khỏi xray-core), và CDN như CloudFront cũng${plain}"
+    echo -e "${yellow}  từ chối origin HTTPS không có cert hợp lệ. Node chạy 443 nên cấp cert thật:${plain}"
+    echo -e "${cyan}    v2bx${plain}${yellow} → chọn 19${plain}"
 fi
 
 # ==========================================
@@ -725,6 +753,31 @@ else
     eval "${LOG_CMD}" 2>/dev/null | tail -15
 fi
 echo -e "${green}==========================================${plain}"
+
+# Canh bao co tien trinh khac dang giu cong cua Node.
+#
+# Linux cho nhieu tien trinh cung bind mot cong (SO_REUSEPORT), khong bao loi gi,
+# nhung ket noi vao bi chia ngau nhien giua chung. Da gap tren 4 may: XrayR hoac
+# x-ui chay song song V2bX tren cong 80/443, node "cai xong bao thanh cong" ma
+# thuc te chi nhan duoc mot nua traffic, nua con lai roi vao tien trinh sai va chet.
+RIVALS=""
+for port in 80 443; do
+    while read -r proc; do
+        case "$proc" in
+            ""|*V2bX*) continue ;;
+            *) RIVALS="${RIVALS}\n   cổng ${port}: ${proc}" ;;
+        esac
+    done <<< "$(ss -lntp 2>/dev/null | awk -v p=":${port}\$" '$4 ~ p {print $NF}' | sort -u)"
+done
+if [ -n "$RIVALS" ]; then
+    echo -e "\n${red}⚠ CẢNH BÁO: có tiến trình khác đang giữ cổng của Node:${plain}"
+    echo -e "${yellow}${RIVALS}${plain}"
+    echo -e "${yellow}Linux cho phép nhiều tiến trình cùng giữ một cổng, không báo lỗi, nhưng${plain}"
+    echo -e "${yellow}kết nối của khách sẽ bị chia ngẫu nhiên — Node chỉ nhận được một phần và${plain}"
+    echo -e "${yellow}phần còn lại rơi vào tiến trình sai rồi chết. Hãy dừng hẳn tiến trình đó:${plain}"
+    echo -e "${cyan}   systemctl stop XrayR && systemctl disable XrayR${plain}   ${yellow}(nếu là XrayR)${plain}"
+    echo -e "${cyan}   systemctl stop x-ui  && systemctl disable x-ui${plain}    ${yellow}(nếu là x-ui)${plain}"
+fi
 
 # Cảnh báo tường lửa đang bật — node sẽ không nhận được kết nối
 if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
