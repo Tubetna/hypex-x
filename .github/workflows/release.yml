@@ -21,6 +21,12 @@ on:
   release:
     types: [published]
 
+# Bước 'Upload binaries to release' cần quyền ghi. Không khai báo ở đây thì
+# workflow lấy quyền mặc định của repo — nếu repo để chỉ-đọc, mọi job build
+# đều xong nhưng bước upload trả 403 và release không có asset nào.
+permissions:
+  contents: write
+
 jobs:
 
   build:
