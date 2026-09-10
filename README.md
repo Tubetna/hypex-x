@@ -18,6 +18,18 @@ Script sẽ hỏi Node ID và giao thức. Thêm `NODE_ID` là **chạy thẳng,
 export HXapiHost="panel.com" && export HXapiKey="API_KEY" && export NODE_ID=5 && bash <(curl -Ls https://raw.githubusercontent.com/Tubetna/hypex-x/main/install.sh)
 ```
 
+Node chạy **cổng 443** thì nên xin luôn chứng chỉ thật — thêm `HXdomain`:
+
+```bash
+export HXapiHost="panel.com" && export HXapiKey="API_KEY" && export NODE_ID=5 \
+  && export HXdomain="node1.domain.com" && export HXcfToken="CF_API_TOKEN" \
+  && bash <(curl -Ls https://raw.githubusercontent.com/Tubetna/hypex-x/main/install.sh)
+```
+
+Bỏ `HXcfToken` thì script xác thực qua cổng 80 — khi đó tên miền phải trỏ thẳng
+về IP máy này và cổng 80 phải mở. Có `HXcfToken` thì xác thực qua DNS, chạy được
+cả khi tên miền đang bật proxy Cloudflare.
+
 Cài xong gõ `v2bx` để mở menu quản lý.
 
 ### Biến điều khiển
@@ -28,7 +40,9 @@ Cài xong gõ `v2bx` để mở menu quản lý.
 | `HXapiKey` | *(hỏi)* | Lấy trong Admin → Cấu hình → Thông số máy chủ |
 | `NODE_ID` | *(hỏi)* | **Đặt biến này là script không hỏi gì nữa** |
 | `NODE_TYPE` | `VMess` | Xem bảng giao thức bên dưới |
-| `AUTO_SSL` | `y` khi có `NODE_ID` | `n` để bỏ chứng chỉ tự ký |
+| `HXdomain` | *(hỏi)* | **Tên miền để xin chứng chỉ thật Let's Encrypt** — đặt biến này là script tự cấp, không hỏi |
+| `HXcfToken` | *(hỏi)* | Cloudflare API Token (`Zone:DNS:Edit`) để xác thực qua DNS. Bỏ trống thì xác thực qua cổng 80 |
+| `AUTO_SSL` | `y` khi có `NODE_ID` | Biến cũ, chỉ dùng cho chứng chỉ **tự ký**. `n` để bỏ qua |
 | `NUM_NODES` | *(hỏi)* | Nhiều node trên một máy thì đặt số rồi nhập từng node |
 | `V2BX_BASE_URL` | GitHub Releases | Trỏ sang mirror riêng nếu cần |
 
@@ -127,7 +141,7 @@ Gõ `v2bx` (Linux):
 | **1** Cài đặt | **6** Khởi động lại | **11** Cài BBR | **16** Tạo SSL tự ký |
 | **2** Cập nhật | **7** Kiểm tra trạng thái | **12** Mở cổng tường lửa | **17** Cập nhật geo |
 | **3** Gỡ cài đặt | **8** Xem log realtime | **13** Chặn Speedtest | **18** Kiểm tra giới hạn thiết bị |
-| **4** Khởi động | **9** Bật tự khởi động | **14** Xem config.json | |
+| **4** Khởi động | **9** Bật tự khởi động | **14** Xem config.json | **19** Cấp SSL thật (Let's Encrypt) |
 | **5** Dừng | **10** Tắt tự khởi động | **15** Tạo khoá X25519 | |
 
 **Mục 2 (Cập nhật)** tải đúng gói theo kiến trúc CPU của máy, **chạy thử binary mới trước khi dừng dịch vụ**, và tự lùi về bản cũ nếu bản mới không khởi động được.
@@ -188,7 +202,11 @@ Script tải qua `releases/latest/download/` nên **không phải sửa gì** sa
 
 ## Lưu ý khi cài
 
-- **Chứng chỉ tự ký theo IP**: bật `allowInsecure` cho node đó trên panel, không thì client báo lỗi chứng chỉ.
+- **Node chạy cổng 443 thì dùng chứng chỉ thật** (menu **19** hoặc biến `HXdomain`). Chứng chỉ tự ký giờ gần như vô dụng:
+  - `allowInsecure` đã bị **xoá khỏi xray-core 26.x** — client mới từ chối nạp luôn cả cấu hình có tuỳ chọn này;
+  - **CloudFront** từ chối thẳng origin HTTPS không có chứng chỉ hợp lệ;
+  - **Cloudflare** không chịu tải luồng dài (XHTTP `stream-one`) qua origin dùng chứng chỉ tự ký — node trả `400`.
+- **Chứng chỉ tự ký theo IP**: chỉ dùng khi test, và phải bật `allowInsecure` cho node đó trên panel (client cũ mới chấp nhận).
 - **Tường lửa**: script cảnh báo khi `firewalld` hoặc `ufw` đang bật. Mở cổng bằng menu **12**, hoặc `firewall-cmd --permanent --add-port=<cổng>/tcp --add-port=<cổng>/udp && firewall-cmd --reload`.
 - **Cài lại đè lên bản đang chạy**: script tự dừng dịch vụ trước khi ghi đè. Linux không cho ghi lên file đang thực thi (`ETXTBSY`).
 - **Windows Defender** có thể chặn `V2bX.exe` — thêm loại trừ cho thư mục cài đặt.

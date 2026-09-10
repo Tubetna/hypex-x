@@ -164,11 +164,12 @@ show_menu() {
     echo -e "${cyan}║${plain}  ${yellow}16.${plain} Tạo chứng chỉ SSL tự ký"
     echo -e "${cyan}║${plain}  ${yellow}17.${plain} Cập nhật dữ liệu geo (geoip/geosite)"
     echo -e "${cyan}║${plain}  ${yellow}18.${plain} Kiểm tra giới hạn thiết bị"
+    echo -e "${cyan}║${plain}  ${yellow}19.${plain} Cấp chứng chỉ SSL thật (Let's Encrypt)"
     echo -e "${cyan}╠══════════════════════════════════════════════════╣${plain}"
     echo -e "${cyan}║${plain}  ${red}0.${plain}  Thoát"
     echo -e "${cyan}╚══════════════════════════════════════════════════╝${plain}"
     echo ""
-    read -p "  Vui lòng nhập tùy chọn [0-18]: " choice
+    read -p "  Vui lòng nhập tùy chọn [0-19]: " choice
     handle_choice "$choice"
 }
 
@@ -192,6 +193,7 @@ handle_choice() {
     16) gen_ssl ;;
     17) update_geo ;;
     18) check_device_limit ;;
+    19) gen_le_ssl ;;
     0)  echo -e "${green}Tạm biệt!${plain}"; exit 0 ;;
     *)  echo -e "${red}Lựa chọn không hợp lệ!${plain}"; sleep 1; show_menu ;;
     esac
@@ -407,6 +409,93 @@ gen_x25519() {
     else
         echo -e "${red}V2bX chưa được cài đặt!${plain}"
     fi
+    press_any_key
+}
+
+# Cấp chứng chỉ thật từ Let's Encrypt cho node chạy cổng 443.
+#
+# Cert tự ký không còn dùng được trong thực tế: xray-core 26.x đã xoá tuỳ chọn
+# allowInsecure nên client mới từ chối nạp cấu hình có nó; CloudFront từ chối
+# thẳng origin HTTPS không có cert hợp lệ; còn Cloudflare thì không chịu tải
+# luồng dài (XHTTP stream-one) qua origin cert tự ký.
+gen_le_ssl() {
+    local domain cf_token acme=/root/.acme.sh/acme.sh
+
+    read -p "Nhập tên miền trỏ về máy này (VD: node1.domain.com): " domain
+    if [ -z "$domain" ]; then
+        echo -e "${red}Chưa nhập tên miền.${plain}"; press_any_key; return
+    fi
+
+    echo -e "${yellow}Nếu tên miền nằm trên Cloudflare (nhất là khi đang bật proxy),${plain}"
+    echo -e "${yellow}dán API Token có quyền Zone:DNS:Edit để xác thực qua DNS.${plain}"
+    echo -e "${yellow}Bỏ trống thì xác thực qua cổng 80 — tên miền phải trỏ thẳng về IP máy này.${plain}"
+    read -p "Cloudflare API Token (bỏ trống để dùng cổng 80): " cf_token
+
+    command -v curl &>/dev/null || {
+        echo -e "${red}Máy chưa có curl.${plain}"; press_any_key; return; }
+
+    if [ ! -f "$acme" ]; then
+        echo -e "${yellow}Đang cài acme.sh...${plain}"
+        curl -fsS https://get.acme.sh | sh -s email="admin@${domain}" &>/dev/null || {
+            echo -e "${red}Cài acme.sh thất bại.${plain}"; press_any_key; return; }
+    fi
+    "$acme" --set-default-ca --server letsencrypt &>/dev/null
+
+    mkdir -p "$CONF_DIR"
+    local issued=false
+
+    if [ -n "$cf_token" ]; then
+        echo -e "${yellow}Đang xin chứng chỉ cho ${domain} (xác thực qua DNS Cloudflare)...${plain}"
+        CF_Token="$cf_token" "$acme" --issue --dns dns_cf -d "$domain" \
+            --keylength ec-256 && issued=true
+    else
+        local stopped=false
+        if ss -lnt 2>/dev/null | grep -q ':80 '; then
+            echo -e "${yellow}Tạm dừng V2bX để giải phóng cổng 80...${plain}"
+            svc stop &>/dev/null && stopped=true
+            sleep 2
+        fi
+        echo -e "${yellow}Đang xin chứng chỉ cho ${domain} (xác thực qua cổng 80)...${plain}"
+        "$acme" --issue --standalone -d "$domain" --keylength ec-256 && issued=true
+        [ "$stopped" = true ] && svc start &>/dev/null
+    fi
+
+    # acme.sh trả mã lỗi khi cert còn hạn ("Skipping. Next renewal time is...").
+    # Đó không phải lỗi — cert đã có sẵn, cứ đem đi cài là được.
+    if [ "$issued" != true ] && [ -s "/root/.acme.sh/${domain}_ecc/fullchain.cer" ]; then
+        echo -e "${yellow}Tên miền này đã có chứng chỉ còn hạn, dùng lại chứng chỉ cũ.${plain}"
+        issued=true
+    fi
+
+    if [ "$issued" != true ]; then
+        echo -e "${red}Xin chứng chỉ thất bại cho ${domain}.${plain}"
+        echo -e "${yellow}  • Qua DNS Cloudflare: API Token phải có quyền Zone:DNS:Edit.${plain}"
+        echo -e "${yellow}  • Qua cổng 80: tên miền phải trỏ đúng IP máy này và cổng 80 phải mở.${plain}"
+        press_any_key; return
+    fi
+
+    local reload="systemctl restart ${SERVICE}"
+    [ "$INIT_SYSTEM" = "openrc" ] && reload="rc-service ${SERVICE} restart"
+
+    # reloadcmd: mỗi lần acme.sh tự gia hạn thì V2bX nạp lại cert mới
+    if ! "$acme" --install-cert -d "$domain" --ecc \
+            --fullchain-file "${CONF_DIR}/cert.crt" \
+            --key-file "${CONF_DIR}/private.key" \
+            --reloadcmd "$reload" &>/dev/null; then
+        echo -e "${red}Cài chứng chỉ vào ${CONF_DIR} thất bại.${plain}"
+        press_any_key; return
+    fi
+
+    chmod 600 "${CONF_DIR}/private.key"
+    echo -e "${green}✓ Đã cấp chứng chỉ thật cho ${domain}${plain}"
+    openssl x509 -in "${CONF_DIR}/cert.crt" -noout -subject -issuer -dates 2>/dev/null | sed 's/^/  /'
+    echo -e "  Cert : ${white}${CONF_DIR}/cert.crt${plain}"
+    echo -e "  Key  : ${white}${CONF_DIR}/private.key${plain}"
+    echo -e "${green}  Tự động gia hạn đã bật sẵn (cron của acme.sh).${plain}"
+    echo -e "${yellow}  Nhớ tắt allowInsecure của node này trên Panel.${plain}"
+
+    read -p "Khởi động lại V2bX để dùng cert mới ngay? (y/n): " yn
+    [[ "$yn" =~ ^[yY] ]] && svc restart
     press_any_key
 }
 

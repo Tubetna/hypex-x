@@ -26,6 +26,90 @@ BIN="${BIN_DIR}/V2bX"
 
 die() { echo -e "${red}Lỗi: $1${plain}" >&2; exit 1; }
 
+# ==========================================
+# Cấp chứng chỉ SSL thật (Let's Encrypt) qua acme.sh
+# ==========================================
+# Vì sao cần: cert tự ký chỉ dùng được khi Panel bật allowInsecure, mà tuỳ chọn
+# này đã bị xoá khỏi xray-core 26.x — client mới từ chối nạp cấu hình có nó.
+# Nặng hơn: CloudFront từ chối thẳng origin HTTPS không có cert hợp lệ, còn
+# Cloudflare thì không chịu tải luồng dài (XHTTP stream-one) qua origin cert
+# tự ký. Node chạy 443 muốn dùng thật thì phải có cert thật.
+
+# Lệnh điều khiển dịch vụ, hợp cho cả systemd lẫn OpenRC
+svc_cmd() {
+    if command -v systemctl &>/dev/null && [ -d /run/systemd/system ]; then
+        echo "systemctl $1 V2bX"
+    else
+        echo "rc-service V2bX $1"
+    fi
+}
+
+issue_le_cert() {
+    local domain="$1" cf_token="$2"
+    [ -z "$domain" ] && { echo -e "${red}Chưa nhập tên miền.${plain}"; return 1; }
+
+    ensure_pkg curl || { echo -e "${red}Không cài được curl.${plain}"; return 1; }
+    ensure_pkg socat &>/dev/null
+
+    local acme=/root/.acme.sh/acme.sh
+    if [ ! -f "$acme" ]; then
+        echo -e "${yellow}Đang cài acme.sh...${plain}"
+        curl -fsS https://get.acme.sh | sh -s email="admin@${domain}" &>/dev/null \
+            || { echo -e "${red}Cài acme.sh thất bại.${plain}"; return 1; }
+    fi
+    "$acme" --set-default-ca --server letsencrypt &>/dev/null
+
+    mkdir -p "${CONF_DIR}"
+    local issued=false
+
+    if [ -n "$cf_token" ]; then
+        # DNS-01: chạy được cả khi tên miền đang bật proxy Cloudflare,
+        # và không cần cổng 80 rảnh
+        echo -e "${yellow}Đang xin chứng chỉ cho ${domain} (xác thực qua DNS Cloudflare)...${plain}"
+        CF_Token="$cf_token" "$acme" --issue --dns dns_cf -d "$domain" \
+            --keylength ec-256 && issued=true
+    else
+        # HTTP-01: cần cổng 80 rảnh nên tạm dừng V2bX nếu nó đang giữ cổng
+        local stopped=false
+        if ss -lnt 2>/dev/null | grep -q ':80 '; then
+            echo -e "${yellow}Tạm dừng V2bX để giải phóng cổng 80...${plain}"
+            eval "$(svc_cmd stop)" &>/dev/null && stopped=true
+            sleep 2
+        fi
+        echo -e "${yellow}Đang xin chứng chỉ cho ${domain} (xác thực qua cổng 80)...${plain}"
+        "$acme" --issue --standalone -d "$domain" --keylength ec-256 && issued=true
+        [ "$stopped" = true ] && eval "$(svc_cmd start)" &>/dev/null
+    fi
+
+    # acme.sh trả mã lỗi khi cert còn hạn ("Skipping. Next renewal time is...").
+    # Đó không phải lỗi — cert đã có sẵn, cứ đem đi cài là được.
+    if [ "$issued" != true ] && [ -s "/root/.acme.sh/${domain}_ecc/fullchain.cer" ]; then
+        echo -e "${yellow}Tên miền này đã có chứng chỉ còn hạn, dùng lại chứng chỉ cũ.${plain}"
+        issued=true
+    fi
+
+    if [ "$issued" != true ]; then
+        echo -e "${red}Xin chứng chỉ thất bại cho ${domain}.${plain}"
+        echo -e "${yellow}  • Qua DNS Cloudflare: API Token phải có quyền Zone:DNS:Edit.${plain}"
+        echo -e "${yellow}  • Qua cổng 80: tên miền phải trỏ đúng IP máy này và cổng 80 phải mở.${plain}"
+        return 1
+    fi
+
+    # reloadcmd: mỗi lần acme.sh tự gia hạn thì V2bX nạp lại cert mới
+    "$acme" --install-cert -d "$domain" --ecc \
+        --fullchain-file "${CONF_DIR}/cert.crt" \
+        --key-file "${CONF_DIR}/private.key" \
+        --reloadcmd "$(svc_cmd restart)" &>/dev/null \
+        || { echo -e "${red}Cài chứng chỉ vào ${CONF_DIR} thất bại.${plain}"; return 1; }
+
+    chmod 600 "${CONF_DIR}/private.key"
+    CERT_DOMAIN="$domain"
+    echo -e "${green}✓ Đã cấp chứng chỉ thật cho ${domain}${plain}"
+    openssl x509 -in "${CONF_DIR}/cert.crt" -noout -subject -issuer -dates 2>/dev/null | sed 's/^/  /'
+    echo -e "${green}  Tự động gia hạn đã bật sẵn (cron của acme.sh).${plain}"
+    return 0
+}
+
 # Kiểm tra quyền root
 [[ $EUID -ne 0 ]] && die "Script này phải được chạy dưới quyền root!"
 
@@ -220,15 +304,49 @@ fi
 [ -z "$API_KEY" ] && die "Chưa nhập API Key."
 
 echo ""
-if [ -z "$AUTO_SSL" ]; then
-    read -p "Bạn có muốn tự động tạo và cài SSL (Self-signed) cho IP máy chủ không? (y/n): " AUTO_SSL
-fi
-if [[ "$AUTO_SSL" =~ ^[yY] ]]; then
-    HAS_SSL=true
-    echo -e "${green}==> Sẽ tự động cấu hình SSL cho các Node.${plain}"
+# Cho phép cài không cần hỏi: đặt sẵn HXdomain (và HXcfToken nếu xác thực qua DNS)
+SSL_DOMAIN="${SSL_DOMAIN:-${HXdomain:-}}"
+CF_TOKEN="${CF_TOKEN:-${HXcfToken:-}}"
+
+if [ -n "$SSL_DOMAIN" ]; then
+    SSL_MODE=1
+elif [ -n "$AUTO_SSL" ]; then
+    # Giữ tương thích ngược với biến AUTO_SSL cũ (y = cert tự ký theo IP)
+    [[ "$AUTO_SSL" =~ ^[yY] ]] && SSL_MODE=2 || SSL_MODE=3
 else
-    HAS_SSL=false
+    echo -e "${cyan}Chọn kiểu chứng chỉ SSL cho Node:${plain}"
+    echo -e "  ${green}1.${plain} Cert thật Let's Encrypt theo tên miền ${green}(khuyên dùng cho cổng 443)${plain}"
+    echo -e "  ${yellow}2.${plain} Cert tự ký theo IP  ${yellow}(chỉ dùng được khi Panel bật allowInsecure)${plain}"
+    echo -e "  ${blue}3.${plain} Bỏ qua, không tạo chứng chỉ"
+    read -p "Nhập số (1-3) [mặc định 1]: " SSL_MODE
+    SSL_MODE="${SSL_MODE:-1}"
 fi
+
+HAS_SSL=false
+USE_LE=false
+case "$SSL_MODE" in
+    1)
+        USE_LE=true
+        if [ -z "$SSL_DOMAIN" ]; then
+            read -p "Nhập tên miền trỏ về máy này (VD: node1.domain.com): " SSL_DOMAIN
+        fi
+        [ -z "$SSL_DOMAIN" ] && die "Chưa nhập tên miền cho chứng chỉ."
+        if [ -z "$CF_TOKEN" ]; then
+            echo -e "${yellow}Nếu tên miền nằm trên Cloudflare (nhất là khi đang bật proxy),${plain}"
+            echo -e "${yellow}dán API Token có quyền Zone:DNS:Edit để xác thực qua DNS.${plain}"
+            echo -e "${yellow}Bỏ trống thì sẽ xác thực qua cổng 80 (tên miền phải trỏ thẳng về IP máy này).${plain}"
+            read -p "Cloudflare API Token (bỏ trống để dùng cổng 80): " CF_TOKEN
+        fi
+        echo -e "${green}==> Sẽ cấp chứng chỉ thật cho ${SSL_DOMAIN}.${plain}"
+        ;;
+    2)
+        HAS_SSL=true
+        echo -e "${green}==> Sẽ tạo chứng chỉ tự ký theo IP máy chủ.${plain}"
+        ;;
+    *)
+        echo -e "${blue}==> Bỏ qua bước tạo chứng chỉ.${plain}"
+        ;;
+esac
 
 echo ""
 if [ -z "$NUM_NODES" ]; then
@@ -306,7 +424,7 @@ for (( i=1; i<=NUM_NODES; i++ )); do
 
     echo -e "${green}==> Đã tự động gán Core [ ${CORE} ] cho giao thức [ ${NODE_TYPE} ]${plain}"
 
-    if [ "$HAS_SSL" = true ]; then
+    if [ "$HAS_SSL" = true ] || [ "$USE_LE" = true ]; then
         CERT_JSON=",
         \"CertConfig\": {
           \"CertMode\": \"file\",
@@ -350,6 +468,15 @@ mkdir -p "${CONF_DIR}" "${BIN_DIR}"
 
 ensure_pkg curl || die "Không cài được curl."
 ensure_pkg unzip || die "Không cài được unzip."
+
+if [ "$USE_LE" = true ]; then
+    ensure_pkg openssl || die "Không cài được openssl."
+    if ! issue_le_cert "$SSL_DOMAIN" "$CF_TOKEN"; then
+        echo -e "${yellow}Chuyển sang tạo chứng chỉ tự ký để Node vẫn chạy được.${plain}"
+        echo -e "${yellow}Cấp lại cert thật sau bằng: ${cyan}v2bx${yellow} → chọn 19.${plain}"
+        HAS_SSL=true
+    fi
+fi
 
 if [ "$HAS_SSL" = true ]; then
     ensure_pkg openssl || die "Không cài được openssl."
