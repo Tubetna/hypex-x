@@ -56,9 +56,13 @@ func buildInbound(option *conf.Options, nodeInfo *panel.NodeInfo, tag string) (*
 	ipAddress := net.ParseAddress(option.ListenIP)
 	in.ListenOn = &coreConf.Address{Address: ipAddress}
 	// Set SniffingConfig
+	// "quic" là bắt buộc: Shadowrocket/iOS đưa QUIC (UDP 443) tới node dưới dạng
+	// IP đích — trên mạng di động VN thường là IPv6 — mà node không có IPv6 thì
+	// gói tin rơi im lặng, Facebook/Instagram không tải được ảnh. Sniff SNI trong
+	// QUIC Initial để đổi đích sang tên miền rồi để freedom tự chọn IPv4.
 	sniffingConfig := &coreConf.SniffingConfig{
 		Enabled:      true,
-		DestOverride: &coreConf.StringList{"http", "tls"},
+		DestOverride: &coreConf.StringList{"http", "tls", "quic"},
 	}
 	if option.XrayOptions.DisableSniffing {
 		sniffingConfig.Enabled = false
