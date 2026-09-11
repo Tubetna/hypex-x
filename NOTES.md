@@ -239,6 +239,13 @@ khác / không phân giải", không cho rơi về tự ký nếu không tự ta
 `SAVED_CF_Token` thì tự dùng DNS-01. Đổi máy node: **DNS `cloudvip1az` → IP mới, rồi cấp cert
 trên máy mới** (token CF nằm trong `/root/.acme.sh/account.conf` máy cũ, copy sang nhớ bỏ CRLF).
 
+**`acme.sh --install-cert` trả exit 1 không có nghĩa cert hỏng (v1.0.5, 11/09/2026).** acme chạy
+`--reloadcmd` ngay lúc install-cert; máy cài mới chưa có service V2bX → `systemctl restart` lỗi → exit 1
+dù cert/key đã chép xong. Bộ cài cũ coi là "cert hỏng" và dừng — máy `103.5.209.20` bị vậy khi DNS
+`cloudbasicz` đã trỏ sang, khách node 30/33 mất mạng ~10 phút. Từ `9af8a7a`: reload có `|| true`, kết quả
+kiểm bằng `cert_key_match` (hai file không rỗng + cùng public key). Và **đổi DNS sang máy mới chỉ sau
+khi V2bX máy mới đã chạy**.
+
 ## 5. Vị trí file — đặt sai là hỏng ngầm
 
 Geo data phải nằm cùng `config.json`, **không phải cùng binary**:
