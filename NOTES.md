@@ -229,6 +229,16 @@ UDP trỏ tới IPv6 của `scontent.*.fbcdn.net`, rồi `curl --http3-only` qua
 trước sửa **timeout 12 s**, sau sửa **200 / 0,28 s**. Hiddify/sing-box không dính vì
 template dùng fake-ip nên app không bao giờ thấy AAAA.
 
+**Cert phải mang tên ORIGIN, không phải tên Host header (11/09/2026).** Node sau CloudFront có
+hai tên: `cloudaz1.hypexcloud.com` (Host header WS, bật proxy Cloudflare) và
+`cloudvip1az.hypexcloud.com` (origin, DNS-only → IP máy). CloudFront bắt tay TLS với tên
+**origin** nên cert phải là `cloudvip1az`. Nhập nhầm `cloudaz1` → HTTP-01 hỏng (xác thực rơi
+vào Cloudflare) → bộ cài cũ lặng lẽ tạo cert tự ký → **502 ở 443 mà cổng 80 vẫn chạy**.
+Từ commit `8d58a57`: `check_cert_domain` kiểm trước, in rõ "đang proxy Cloudflare / trỏ máy
+khác / không phân giải", không cho rơi về tự ký nếu không tự tay chọn; acme.sh có
+`SAVED_CF_Token` thì tự dùng DNS-01. Đổi máy node: **DNS `cloudvip1az` → IP mới, rồi cấp cert
+trên máy mới** (token CF nằm trong `/root/.acme.sh/account.conf` máy cũ, copy sang nhớ bỏ CRLF).
+
 ## 5. Vị trí file — đặt sai là hỏng ngầm
 
 Geo data phải nằm cùng `config.json`, **không phải cùng binary**:
