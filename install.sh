@@ -59,6 +59,52 @@ find_existing_cert() {
     return 1
 }
 
+# Kiểm tên miền TRƯỚC khi xin cert. Bẫy ngày 11/09/2026: nhập `cloudaz1.hypexcloud.com`
+# (tên Host header WS, đang bật proxy Cloudflare) thay vì tên origin `cloudvip1az…`
+# trỏ thẳng IP máy → HTTP-01 hỏng → bộ cài âm thầm rơi về cert tự ký → CloudFront 502,
+# node 443 chết với khách mà không ai biết. Giờ phải chỉ ra ngay và không được im lặng.
+#   0 = trỏ thẳng về máy này    10 = đang qua proxy Cloudflare
+#  20 = trỏ về IP khác           30 = không phân giải được
+DOMAIN_POINTS_TO=""
+MY_PUBLIC_IP=""
+check_cert_domain() {
+    local domain="$1" ips first
+    [ -z "$MY_PUBLIC_IP" ] && MY_PUBLIC_IP=$(curl -fsS -4 --max-time 8 https://api.ipify.org 2>/dev/null \
+        || curl -fsS -4 --max-time 8 https://ifconfig.me 2>/dev/null)
+    MY_PUBLIC_IP=$(echo "$MY_PUBLIC_IP" | tr -d '[:space:]')
+    ips=$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u)
+    [ -z "$ips" ] && return 30
+    first=$(echo "$ips" | head -1); DOMAIN_POINTS_TO="$first"
+    [ -n "$MY_PUBLIC_IP" ] && echo "$ips" | grep -qx "$MY_PUBLIC_IP" && return 0
+    # Proxy Cloudflare (đám mây cam) trả header "server: cloudflare" ở mọi IP của nó
+    if curl -sI -4 --max-time 6 -H "Host: $domain" "http://$first/" 2>/dev/null \
+            | grep -qi '^server: *cloudflare'; then
+        return 10
+    fi
+    return 20
+}
+
+# acme.sh nhớ token Cloudflare của lần trước trong account.conf; có nó thì DNS-01 chạy được
+# dù người cài không dán lại token.
+has_saved_cf_token() {
+    grep -q '^SAVED_CF_Token=' /root/.acme.sh/account.conf 2>/dev/null
+}
+
+# In kết luận của check_cert_domain cho người cài. $1 = mã trả về, $2 = tên miền
+explain_cert_domain() {
+    case "$1" in
+        0)  echo -e "${green}  ✓ ${2} trỏ thẳng về máy này (${MY_PUBLIC_IP}).${plain}" ;;
+        10) echo -e "${red}  ✗ ${2} đang bật PROXY Cloudflare (đám mây cam), trỏ tới ${DOMAIN_POINTS_TO}.${plain}"
+            echo -e "${yellow}    Xác thực qua cổng 80 chắc chắn thất bại. Và quan trọng hơn: nếu node đứng${plain}"
+            echo -e "${yellow}    sau CloudFront thì tên cần cấp là tên ORIGIN trỏ thẳng IP máy (DNS-only),${plain}"
+            echo -e "${yellow}    KHÔNG phải tên trong Host header WebSocket. Kiểm lại tên trước khi tiếp.${plain}" ;;
+        20) echo -e "${red}  ✗ ${2} trỏ về ${DOMAIN_POINTS_TO}, còn máy này là ${MY_PUBLIC_IP:-?}.${plain}"
+            echo -e "${yellow}    Cert vẫn cấp được qua DNS Cloudflare, nhưng khách/CDN sẽ nối tới IP kia${plain}"
+            echo -e "${yellow}    chứ không phải máy này. Thường là chưa đổi bản ghi DNS sang máy mới.${plain}" ;;
+        30) echo -e "${red}  ✗ Không phân giải được ${2}. Bản ghi DNS chưa có hoặc gõ sai.${plain}" ;;
+    esac
+}
+
 issue_le_cert() {
     local domain="$1" cf_token="$2"
     [ -z "$domain" ] && { echo -e "${red}Chưa nhập tên miền.${plain}"; return 1; }
@@ -77,9 +123,10 @@ issue_le_cert() {
     mkdir -p "${CONF_DIR}"
     local issued=false
 
-    if [ -n "$cf_token" ]; then
+    if [ -n "$cf_token" ] || has_saved_cf_token; then
         # DNS-01: chạy được cả khi tên miền đang bật proxy Cloudflare,
-        # và không cần cổng 80 rảnh
+        # và không cần cổng 80 rảnh. Không dán token thì acme.sh dùng token đã lưu.
+        [ -z "$cf_token" ] && echo -e "${yellow}Dùng lại token Cloudflare đã lưu trong acme.sh.${plain}"
         echo -e "${yellow}Đang xin chứng chỉ cho ${domain} (xác thực qua DNS Cloudflare)...${plain}"
         CF_Token="$cf_token" "$acme" --issue --dns dns_cf -d "$domain" \
             --keylength ec-256 && issued=true
@@ -336,6 +383,14 @@ CF_TOKEN="${CF_TOKEN:-${HXcfToken:-}}"
 
 if [ -n "$SSL_DOMAIN" ]; then
     SSL_MODE=1
+    SSL_PRESET=true
+    # Cài không hỏi: vẫn phải kiểm tên miền, sai là dừng ngay chứ không rơi về tự ký
+    ensure_pkg curl &>/dev/null
+    check_cert_domain "$SSL_DOMAIN"; _rc=$?
+    explain_cert_domain "$_rc" "$SSL_DOMAIN"
+    if [ "$_rc" -eq 30 ] || { [ "$_rc" -ne 0 ] && [ -z "$CF_TOKEN" ] && ! has_saved_cf_token; }; then
+        die "HXdomain=${SSL_DOMAIN} không dùng được cho máy này (xem trên). Sửa DNS hoặc thêm HXcfToken."
+    fi
 elif [ -n "$AUTO_SSL" ]; then
     # Giữ tương thích ngược với biến AUTO_SSL cũ (y = cert tự ký theo IP)
     [[ "$AUTO_SSL" =~ ^[yY] ]] && SSL_MODE=2 || SSL_MODE=3
@@ -367,12 +422,33 @@ case "$SSL_MODE" in
             fi
         fi
         [ -z "$SSL_DOMAIN" ] && die "Chưa nhập tên miền cho chứng chỉ."
-        if [ -z "$CF_TOKEN" ]; then
+        if [ -z "$CF_TOKEN" ] && ! has_saved_cf_token; then
             echo -e "${yellow}Nếu tên miền nằm trên Cloudflare (nhất là khi đang bật proxy),${plain}"
             echo -e "${yellow}dán API Token có quyền Zone:DNS:Edit để xác thực qua DNS.${plain}"
             echo -e "${yellow}Bỏ trống thì sẽ xác thực qua cổng 80 (tên miền phải trỏ thẳng về IP máy này).${plain}"
             read -p "Cloudflare API Token (bỏ trống để dùng cổng 80): " CF_TOKEN
         fi
+        # Kiểm tên miền ngay tại đây, lúc còn sửa được, thay vì để acme thất bại rồi
+        # âm thầm rơi về cert tự ký.
+        ensure_pkg curl &>/dev/null
+        for _try in 1 2 3; do
+            echo -e "${cyan}Kiểm tra ${SSL_DOMAIN}...${plain}"
+            check_cert_domain "$SSL_DOMAIN"; _rc=$?
+            explain_cert_domain "$_rc" "$SSL_DOMAIN"
+            [ "$_rc" -eq 0 ] && break
+            if [ "$_rc" -ne 30 ] && { [ -n "$CF_TOKEN" ] || has_saved_cf_token; }; then
+                read -p "Vẫn cấp cert cho tên này qua DNS Cloudflare? [y/N]: " _ok
+                [[ "$_ok" =~ ^[yY] ]] && break
+            elif [ "$_rc" -eq 10 ]; then
+                echo -e "${yellow}Tên này chỉ cấp được qua DNS Cloudflare — cần API Token.${plain}"
+            fi
+            [ "$_try" -eq 3 ] && die "Tên miền không hợp lệ cho máy này, dừng để anh kiểm lại DNS."
+            read -p "Nhập lại tên miền (Enter = giữ ${SSL_DOMAIN}): " _d
+            [ -n "$_d" ] && SSL_DOMAIN="$_d"
+            if [ -z "$CF_TOKEN" ] && ! has_saved_cf_token; then
+                read -p "Cloudflare API Token (bỏ trống nếu tên miền trỏ thẳng máy này): " CF_TOKEN
+            fi
+        done
         echo -e "${green}==> Sẽ cấp chứng chỉ thật cho ${SSL_DOMAIN}.${plain}"
         ;;
     2)
@@ -508,9 +584,21 @@ ensure_pkg unzip || die "Không cài được unzip."
 if [ "$USE_LE" = true ]; then
     ensure_pkg openssl || die "Không cài được openssl."
     if ! issue_le_cert "$SSL_DOMAIN" "$CF_TOKEN"; then
-        echo -e "${yellow}Chuyển sang tạo chứng chỉ tự ký để Node vẫn chạy được.${plain}"
-        echo -e "${yellow}Cấp lại cert thật sau bằng: ${cyan}v2bx${yellow} → chọn 19.${plain}"
-        HAS_SSL=true
+        # Cài không hỏi (HXdomain đặt sẵn) mà cert hỏng thì dừng hẳn — để node 443
+        # chạy với cert tự ký là CloudFront 502 âm thầm, tệ hơn dừng cài.
+        [ "${SSL_PRESET:-}" = true ] && die "Không cấp được cert cho ${SSL_DOMAIN}. Kiểm lại DNS/token rồi chạy lại."
+        echo -e "${red}Không cấp được cert thật cho ${SSL_DOMAIN}.${plain}"
+        echo -e "  ${green}1.${plain} Nhập lại tên miền / token rồi thử lại"
+        echo -e "  ${yellow}2.${plain} Tạm dùng cert tự ký theo IP ${red}(node 443 sẽ 502 qua CloudFront)${plain}"
+        echo -e "  ${blue}3.${plain} Dừng cài"
+        read -p "Chọn (1-3) [mặc định 1]: " _c
+        case "${_c:-1}" in
+            2) HAS_SSL=true ;;
+            3) die "Dừng theo yêu cầu." ;;
+            *) read -p "Tên miền (Enter = giữ ${SSL_DOMAIN}): " _d; [ -n "$_d" ] && SSL_DOMAIN="$_d"
+               read -p "Cloudflare API Token (Enter = giữ như cũ): " _t; [ -n "$_t" ] && CF_TOKEN="$_t"
+               issue_le_cert "$SSL_DOMAIN" "$CF_TOKEN" || die "Vẫn không cấp được cert. Dừng để anh kiểm lại DNS/token." ;;
+        esac
     fi
 fi
 
