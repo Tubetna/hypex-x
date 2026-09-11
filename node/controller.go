@@ -19,7 +19,7 @@ type Controller struct {
 	limiter                   *limiter.Limiter
 	traffic                   map[string]int64
 	userList                  []panel.UserInfo
-	aliveMap                  map[int]int
+	aliveMap                  *panel.AliveMap
 	info                      *panel.NodeInfo
 	nodeInfoMonitorPeriodic   *task.Task
 	userReportPeriodic        *task.Task

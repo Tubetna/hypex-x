@@ -81,15 +81,53 @@ Loại nào chạy nhân nào:
 
 ## 3. Giới hạn thiết bị
 
-Chuỗi hoạt động:
+Chuỗi hoạt động (từ **v1.0.2**, 11/09/2026):
 
 ```
-Node đếm IP → POST /api/v1/server/UniProxy/alive
-                    ↓  panel lưu Redis, TTL 300s
+Node đếm IP có kết nối THẬT → POST /api/v1/server/UniProxy/alive
+                    ↓  panel lưu Redis, TTL 300s, IP phải sống ≥2 lượt mới tính
 Node lấy về ← GET  /api/v1/server/UniProxy/alivelist
+                    {"alive": {uid: số máy}, "alive_ips": {uid: [ip đã biết]}}
                     ↓
-      deviceLimit <= aliveIp  →  từ chối kết nối   (limiter/limiter.go:152-186)
+      chặn khi:  deviceLimit <= alive[uid]  VÀ  ip ∉ alive_ips[uid]
+                                                (limiter/limiter.go: overDeviceLimit)
 ```
+
+### Vì sao phải có `alive_ips` — lỗi "lâu lâu mất mạng vài phút rồi tự có lại"
+
+Bản cũ chỉ so `deviceLimit <= alive`. Khách có đúng 2 máy (= limit 2) mà điện
+thoại **đổi node** (app URLTest tự nhảy, hoặc khách bấm) thì node mới thấy IP
+"lạ" → hỏi panel → 2 → `2 <= 2` → **cắt kết nối**, dù chính máy đó là 1 trong 2
+máy đang được đếm. Phải đợi node cũ báo IP rớt (≤60 s) + node mới kéo alivelist
+(≤60 s) → tối đa ~2 phút. App báo `EOF` trên **mọi** node cùng lúc vì alivelist là
+toàn hệ thống, nên trông y hệt node chết. Gặp thật 11/09/2026 với 2 khách CHINA.
+
+Giờ panel trả thêm danh sách IP; IP đã có ở node nào thì không phải máy mới.
+Panel cũ không trả `alive_ips` → node hành xử như trước (test `TestOldPanelStillEnforces`).
+
+### Bấm "đo độ trễ" không tính là thiết bị
+
+`limiter.MarkReal()` được gọi sau `CheckLimit` với host đích. IP mà trong một lượt
+báo cáo **chỉ** nối tới máy chủ đo độ trễ (`www.gstatic.com`, `cp.cloudflare.com`,
+`captive.apple.com`, … — bảng `probeHosts`) thì `GetOnlineDevice()` **không báo lên
+panel**. Vẫn nhớ ở `OldUserOnline` để lượt sau không bị coi là IP lạ.
+Muốn thêm host thì sửa `probeHosts` — đừng thêm `www.google.com`, khách TQ dùng thật.
+
+### Log chặn giờ nhìn thấy được
+
+Dòng `Limited <email> by conn or ip, from <ip>` trước ở mức Info, mà core xray chạy
+mức warning nên **không bao giờ ra log** — chặn im lặng, nhìn journal tưởng node
+khoẻ. Đã nâng lên Warning (xray) / Error (sing). `CheckLimit` chạy **trước** dòng
+`accepted` (dispatcher `routedDispatch`), nên kết nối bị chặn không có cả dòng
+accepted — khoảng trống trong log của một khách chính là dấu vết.
+
+### Còn treo: CGNAT đổi IP
+
+Nhà mạng di động TQ cấp IP khác nhau cho từng luồng trong cùng dải /24 (đã thấy user
+35642 có `222.188.99.85/.22/.84` cùng lúc). Một điện thoại thành 2–3 "máy". IP mới
+tinh thì `alive_ips` không cứu được. Cách chữa hợp lý là panel khử trùng theo /24
+(IPv4) và /64 (IPv6) thay vì theo IP — chưa làm, cần chủ quyết định vì nó nới limit
+cho hai máy cùng dải.
 
 ### Cấu hình chết — đừng mất công đặt
 
@@ -106,14 +144,9 @@ Panel cũng có khoá chết tương tự: `device_limit_mode` xuất hiện tro
 ### `DeviceOnlineMinTraffic` không lọc được ping
 
 `node/user.go:29-41` xây `nocountUID` **khoá theo UID**, không phải theo IP. Khách
-đang tải nặng trên máy chính thì UID không nằm trong danh sách bỏ qua, nên **mọi
-IP của khách đều được báo lên**, gồm cả IP chỉ ping vài KB. Ngưỡng này chỉ cứu khi
-khách hoàn toàn không có traffic — lúc đó cũng chẳng ai kêu.
-
-Muốn chặn ping bị tính thiết bị thì phải sửa: hoặc lọc theo IP ở node (cần đo
-traffic từng IP — chưa có), hoặc **đặt grace ở panel** (yêu cầu IP sống qua ≥2 lượt
-báo cáo mới tính) — cách này rẻ hơn hẳn vì chỉ sửa PHP, không phải build lại và cài
-lại mọi node.
+đang tải nặng trên máy chính thì UID không nằm trong danh sách bỏ qua. Việc lọc
+ping theo IP giờ do `MarkReal`/`probeHosts` đảm nhiệm (ở trên); ngưỡng này chỉ còn
+tác dụng khi khách hoàn toàn không có traffic.
 
 ---
 

@@ -30,6 +30,12 @@ type Limiter struct {
 	UserLimitInfo *sync.Map      // Key: TagUUID value: UserLimitInfo
 	SpeedLimiter  *sync.Map      // key: TagUUID, value: *ratelimit.Bucket
 	AliveList     map[int]int    // Key: Uid, value: alive_ip
+	// AliveIPs: IP panel đang ghi nhận cho mỗi user (mọi node gộp lại).
+	// IP có trong đây là máy đã được đếm, không phải thiết bị mới.
+	AliveIPs map[int]map[string]struct{} // Key: Uid, value: set IP
+	// RealIP: IP đã có kết nối tới đích KHÔNG phải máy chủ đo độ trễ trong lượt
+	// báo cáo hiện tại. Chỉ IP nằm trong đây mới được báo lên panel làm thiết bị.
+	RealIP *sync.Map // Key: TagUUID + "|" + Ip, value: struct{}
 }
 
 type UserLimitInfo struct {
@@ -41,15 +47,16 @@ type UserLimitInfo struct {
 	OverLimit         bool
 }
 
-func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, aliveList map[int]int) *Limiter {
+func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, alive *panel.AliveMap) *Limiter {
 	info := &Limiter{
 		SpeedLimit:    l.SpeedLimit,
 		UserOnlineIP:  new(sync.Map),
 		UserLimitInfo: new(sync.Map),
 		SpeedLimiter:  new(sync.Map),
-		AliveList:     aliveList,
 		OldUserOnline: new(sync.Map),
+		RealIP:        new(sync.Map),
 	}
+	info.SetAlive(alive)
 	uuidmap := make(map[string]int)
 	for i := range users {
 		uuidmap[users[i].Uuid] = users[i].Id
@@ -69,6 +76,47 @@ func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, aliveLi
 	limiter[tag] = info
 	limitLock.Unlock()
 	return info
+}
+
+// SetAlive nạp kết quả /alivelist mới nhất: số thiết bị đang đếm và các IP đã biết.
+func (l *Limiter) SetAlive(alive *panel.AliveMap) {
+	if alive == nil {
+		return
+	}
+	ips := make(map[int]map[string]struct{}, len(alive.IPs))
+	for uid, list := range alive.IPs {
+		set := make(map[string]struct{}, len(list))
+		for _, ip := range list {
+			set[strings.TrimPrefix(ip, "::ffff:")] = struct{}{}
+		}
+		ips[uid] = set
+	}
+	if alive.Alive == nil {
+		alive.Alive = make(map[int]int)
+	}
+	l.AliveList = alive.Alive
+	l.AliveIPs = ips
+}
+
+// overDeviceLimit: IP này có bị coi là thiết bị vượt giới hạn không.
+//
+// Chỉ chặn khi (1) user có giới hạn, (2) panel đã đếm đủ số máy, VÀ (3) IP này
+// panel chưa từng thấy ở node nào. Bỏ điều kiện (3) thì máy đã đếm rồi vừa
+// đổi node hoặc bị nhà mạng đổi IP cũng bị chặn — đó là lý do khách "lâu lâu
+// mất mạng vài phút rồi tự có lại".
+func (l *Limiter) overDeviceLimit(uid, deviceLimit int, ip string) bool {
+	if deviceLimit <= 0 {
+		return false
+	}
+	if l.AliveList[uid] < deviceLimit {
+		return false
+	}
+	if set, ok := l.AliveIPs[uid]; ok {
+		if _, known := set[ip]; known {
+			return false
+		}
+	}
+	return true
 }
 
 func GetLimiter(tag string) (info *Limiter, err error) {
@@ -94,6 +142,7 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		l.SpeedLimiter.Delete(format.UserTag(tag, deleted[i].Uuid))
 		delete(l.UUIDtoUID, deleted[i].Uuid)
 		delete(l.AliveList, deleted[i].Id)
+		delete(l.AliveIPs, deleted[i].Id)
 	}
 	for i := range added {
 		userLimit := &UserLimitInfo{
@@ -154,7 +203,6 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 		// Store online user for device limit
 		newipMap := new(sync.Map)
 		newipMap.Store(ip, uid)
-		aliveIp := l.AliveList[uid]
 		// If any device is online
 		if v, loaded := l.UserOnlineIP.LoadOrStore(taguuid, newipMap); loaded {
 			oldipMap := v.(*sync.Map)
@@ -164,24 +212,18 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 					if v.(int) == uid {
 						l.OldUserOnline.Delete(ip)
 					}
-				} else if deviceLimit > 0 {
-					if deviceLimit <= aliveIp {
-						oldipMap.Delete(ip)
-						return nil, true
-					}
+				} else if l.overDeviceLimit(uid, deviceLimit, ip) {
+					oldipMap.Delete(ip)
+					return nil, true
 				}
 			}
 		} else if v, ok := l.OldUserOnline.Load(ip); ok {
 			if v.(int) == uid {
 				l.OldUserOnline.Delete(ip)
 			}
-		} else {
-			if deviceLimit > 0 {
-				if deviceLimit <= aliveIp {
-					l.UserOnlineIP.Delete(taguuid)
-					return nil, true
-				}
-			}
+		} else if l.overDeviceLimit(uid, deviceLimit, ip) {
+			l.UserOnlineIP.Delete(taguuid)
+			return nil, true
 		}
 	}
 
@@ -199,9 +241,16 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 	}
 }
 
+// GetOnlineDevice trả về các IP sẽ báo lên panel làm "thiết bị" rồi reset lượt.
+//
+// IP trong lượt này chỉ nối tới máy chủ đo độ trễ (generate_204, captive
+// portal…) thì KHÔNG báo — bấm "kiểm tra độ trễ" không được tính là một máy.
+// Nó vẫn được nhớ ở OldUserOnline để lượt sau không bị coi là IP lạ.
 func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {
 	var onlineUser []panel.OnlineUser
 	l.OldUserOnline = new(sync.Map)
+	real := l.RealIP
+	l.RealIP = new(sync.Map)
 	l.UserOnlineIP.Range(func(key, value interface{}) bool {
 		taguuid := key.(string)
 		ipMap := value.(*sync.Map)
@@ -209,7 +258,9 @@ func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {
 			uid := value.(int)
 			ip := key.(string)
 			l.OldUserOnline.Store(ip, uid)
-			onlineUser = append(onlineUser, panel.OnlineUser{UID: uid, IP: ip})
+			if _, ok := real.Load(taguuid + "|" + ip); ok {
+				onlineUser = append(onlineUser, panel.OnlineUser{UID: uid, IP: ip})
+			}
 			return true
 		})
 		l.UserOnlineIP.Delete(taguuid) // Reset online device
@@ -217,6 +268,44 @@ func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {
 	})
 
 	return &onlineUser, nil
+}
+
+// probeHosts: máy chủ mà app VPN dùng để đo độ trễ / kiểm tra mạng. Kết nối
+// chỉ tới các đích này không chứng tỏ có người đang dùng.
+var probeHosts = map[string]struct{}{
+	"www.gstatic.com":               {},
+	"connectivitycheck.gstatic.com": {},
+	"connectivitycheck.android.com": {},
+	"clients1.google.com":           {},
+	"clients3.google.com":           {},
+	"cp.cloudflare.com":             {},
+	"captive.apple.com":             {},
+	"www.apple.com":                 {}, // Reality SNI, iOS ping "www.apple.com/library/test/success.html"
+	"www.msftconnecttest.com":       {},
+	"www.msftncsi.com":              {},
+	"detectportal.firefox.com":      {},
+	"connect.rom.miui.com":          {},
+	"wifi.vivo.com.cn":              {},
+	"conn1.oppomobile.com":          {},
+	"conn2.oppomobile.com":          {},
+	"1.1.1.1":                       {},
+	"1.0.0.1":                       {},
+}
+
+// IsProbeHost: đích này có phải máy chủ đo độ trễ không.
+func IsProbeHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	_, ok := probeHosts[host]
+	return ok
+}
+
+// MarkReal ghi nhận IP nguồn vừa mở kết nối tới một đích thật (không phải
+// máy chủ đo độ trễ). Gọi sau khi CheckLimit đã cho qua.
+func (l *Limiter) MarkReal(taguuid, ip, destHost string) {
+	if IsProbeHost(destHost) {
+		return
+	}
+	l.RealIP.Store(taguuid+"|"+strings.TrimPrefix(ip, "::ffff:"), struct{}{})
 }
 
 type UserIpList struct {

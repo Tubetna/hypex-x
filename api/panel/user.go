@@ -26,8 +26,30 @@ type UserListBody struct {
 	Users []UserInfo `json:"users" msgpack:"users"`
 }
 
+// AliveMap là kết quả GET /alivelist.
+//
+//   - Alive: số thiết bị panel đang đếm cho mỗi user (đã khử trùng IP giữa các
+//     node, đã bỏ IP chỉ thấy một lượt).
+//   - IPs: MỌI IP panel còn ghi nhận của user đó (kể cả IP mới thấy một lượt).
+//     Node dùng danh sách này để nhận ra "IP này là máy đã đếm rồi, vừa đổi node"
+//     thay vì coi nó là thiết bị mới và chặn. Panel cũ không trả trường này thì
+//     IPs rỗng → node hành xử như trước.
 type AliveMap struct {
-	Alive map[int]int `json:"alive"`
+	Alive map[int]int      `json:"alive"`
+	IPs   map[int][]string `json:"alive_ips"`
+}
+
+// KnownIP cho biết panel có đang ghi nhận ip này là của uid không.
+func (a *AliveMap) KnownIP(uid int, ip string) bool {
+	if a == nil {
+		return false
+	}
+	for _, v := range a.IPs[uid] {
+		if v == ip {
+			return true
+		}
+	}
+	return false
 }
 
 // GetUserList will pull user from v2board
@@ -90,8 +112,8 @@ func (c *Client) GetUserList() ([]UserInfo, error) {
 	return userlist.Users, nil
 }
 
-// GetUserAlive will fetch the alive_ip count for users
-func (c *Client) GetUserAlive() (map[int]int, error) {
+// GetUserAlive will fetch the alive_ip count (and the known IPs) for users
+func (c *Client) GetUserAlive() (*AliveMap, error) {
 	c.AliveMap = &AliveMap{}
 	const path = "/api/v1/server/UniProxy/alivelist"
 	r, err := c.client.R().
@@ -99,20 +121,23 @@ func (c *Client) GetUserAlive() (map[int]int, error) {
 		Get(path)
 	if err != nil || r.StatusCode() >= 399 {
 		c.AliveMap.Alive = make(map[int]int)
-		return c.AliveMap.Alive, nil
+		return c.AliveMap, nil
 	}
 	if r == nil || r.RawResponse == nil {
 		fmt.Printf("received nil response or raw response")
 		c.AliveMap.Alive = make(map[int]int)
-		return c.AliveMap.Alive, nil
+		return c.AliveMap, nil
 	}
 	defer r.RawResponse.Body.Close()
 	if err := json.Unmarshal(r.Body(), c.AliveMap); err != nil {
 		fmt.Printf("unmarshal user alive list error: %s", err)
 		c.AliveMap.Alive = make(map[int]int)
 	}
+	if c.AliveMap.Alive == nil {
+		c.AliveMap.Alive = make(map[int]int)
+	}
 
-	return c.AliveMap.Alive, nil
+	return c.AliveMap, nil
 }
 
 type UserTraffic struct {

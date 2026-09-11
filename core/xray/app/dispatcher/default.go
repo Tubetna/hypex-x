@@ -148,7 +148,8 @@ func (*DefaultDispatcher) Start() error {
 // Close implements common.Closable.
 func (*DefaultDispatcher) Close() error { return nil }
 
-func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*transport.Link, *transport.Link, *limiter.Limiter, error) {
+func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destination) (*transport.Link, *transport.Link, *limiter.Limiter, error) {
+	network := destination.Network
 	opt := pipe.OptionsFromContext(ctx)
 	uplinkReader, uplinkWriter := pipe.New(opt...)
 	downlinkReader, downlinkWriter := pipe.New(opt...)
@@ -187,13 +188,16 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			network == net.Network_TCP,
 			sessionInbound.Source.Network == net.Network_TCP)
 		if reject {
-			errors.LogInfo(ctx, "Limited ", user.Email, " by conn or ip")
+			// Mức Warning để nhìn log là biết khách bị chặn vì thiết bị,
+			// không phải node hỏng (Info bị ẩn vì core chạy mức warning).
+			errors.LogWarning(ctx, "Limited ", user.Email, " by conn or ip, from ", sessionInbound.Source.Address.IP().String())
 			common.Close(outboundLink.Writer)
 			common.Close(inboundLink.Writer)
 			common.Interrupt(outboundLink.Reader)
 			common.Interrupt(inboundLink.Reader)
 			return nil, nil, nil, errors.New("Limited ", user.Email, " by conn or ip")
 		}
+		limit.MarkReal(user.Email, sessionInbound.Source.Address.IP().String(), destination.Address.String())
 		var lm *LinkManager
 		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
 			lm = &LinkManager{
@@ -302,7 +306,7 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 		ctx = session.ContextWithContent(ctx, content)
 	}
 	sniffingRequest := content.SniffingRequest
-	inbound, outbound, l, err := d.getLink(ctx, destination.Network)
+	inbound, outbound, l, err := d.getLink(ctx, destination)
 	if err != nil {
 		return nil, err
 	}
@@ -383,11 +387,12 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			destination.Network == net.Network_TCP,
 			sessionInbound.Source.Network == net.Network_TCP)
 		if reject {
-			errors.LogInfo(ctx, "Limited ", user.Email, " by conn or ip")
+			errors.LogWarning(ctx, "Limited ", user.Email, " by conn or ip, from ", sessionInbound.Source.Address.IP().String())
 			common.Close(outbound.Writer)
 			common.Interrupt(outbound.Reader)
 			return errors.New("Limited ", user.Email, " by conn or ip")
 		}
+		limit.MarkReal(user.Email, sessionInbound.Source.Address.IP().String(), destination.Address.String())
 		var lm *LinkManager
 		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
 			lm = &LinkManager{
