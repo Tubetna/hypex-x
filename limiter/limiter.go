@@ -2,6 +2,7 @@ package limiter
 
 import (
 	"errors"
+	"net"
 	"regexp"
 	"strings"
 	"sync"
@@ -30,9 +31,10 @@ type Limiter struct {
 	UserLimitInfo *sync.Map      // Key: TagUUID value: UserLimitInfo
 	SpeedLimiter  *sync.Map      // key: TagUUID, value: *ratelimit.Bucket
 	AliveList     map[int]int    // Key: Uid, value: alive_ip
-	// AliveIPs: IP panel đang ghi nhận cho mỗi user (mọi node gộp lại).
-	// IP có trong đây là máy đã được đếm, không phải thiết bị mới.
-	AliveIPs map[int]map[string]struct{} // Key: Uid, value: set IP
+	// AliveNets: DẢI mạng panel đang ghi nhận cho mỗi user (mọi node gộp lại),
+	// đã gom theo /24 (IPv4) · /64 (IPv6). IP mới thuộc một dải đã biết là máy
+	// cũ vừa bị CGNAT đổi IP, không phải thiết bị mới → không chặn.
+	AliveNets map[int]map[string]struct{} // Key: Uid, value: set dải
 	// RealIP: IP đã có kết nối tới đích KHÔNG phải máy chủ đo độ trễ trong lượt
 	// báo cáo hiện tại. Chỉ IP nằm trong đây mới được báo lên panel làm thiết bị.
 	RealIP *sync.Map // Key: TagUUID + "|" + Ip, value: struct{}
@@ -83,19 +85,19 @@ func (l *Limiter) SetAlive(alive *panel.AliveMap) {
 	if alive == nil {
 		return
 	}
-	ips := make(map[int]map[string]struct{}, len(alive.IPs))
+	nets := make(map[int]map[string]struct{}, len(alive.IPs))
 	for uid, list := range alive.IPs {
 		set := make(map[string]struct{}, len(list))
 		for _, ip := range list {
-			set[strings.TrimPrefix(ip, "::ffff:")] = struct{}{}
+			set[subnetKey(strings.TrimPrefix(ip, "::ffff:"))] = struct{}{}
 		}
-		ips[uid] = set
+		nets[uid] = set
 	}
 	if alive.Alive == nil {
 		alive.Alive = make(map[int]int)
 	}
 	l.AliveList = alive.Alive
-	l.AliveIPs = ips
+	l.AliveNets = nets
 }
 
 // overDeviceLimit: IP này có bị coi là thiết bị vượt giới hạn không.
@@ -111,12 +113,26 @@ func (l *Limiter) overDeviceLimit(uid, deviceLimit int, ip string) bool {
 	if l.AliveList[uid] < deviceLimit {
 		return false
 	}
-	if set, ok := l.AliveIPs[uid]; ok {
-		if _, known := set[ip]; known {
-			return false
+	if set, ok := l.AliveNets[uid]; ok {
+		if _, known := set[subnetKey(strings.TrimPrefix(ip, "::ffff:"))]; known {
+			return false // IP mới nhưng cùng dải máy đã đếm → CGNAT đổi IP, tha
 		}
 	}
 	return true
+}
+
+// subnetKey gom IP về dải để so khớp: /24 cho IPv4, /64 cho IPv6. Nhà mạng di
+// động đổi IP công cộng liên tục trong một dải; coi cả dải là một thiết bị thì
+// một máy không bị đếm thành nhiều. IP không hợp lệ trả về nguyên văn.
+func subnetKey(ip string) string {
+	p := net.ParseIP(ip)
+	if p == nil {
+		return ip
+	}
+	if v4 := p.To4(); v4 != nil {
+		return net.IP(v4.Mask(net.CIDRMask(24, 32))).String() + "/24"
+	}
+	return p.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }
 
 func GetLimiter(tag string) (info *Limiter, err error) {
@@ -142,7 +158,7 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		l.SpeedLimiter.Delete(format.UserTag(tag, deleted[i].Uuid))
 		delete(l.UUIDtoUID, deleted[i].Uuid)
 		delete(l.AliveList, deleted[i].Id)
-		delete(l.AliveIPs, deleted[i].Id)
+		delete(l.AliveNets, deleted[i].Id)
 	}
 	for i := range added {
 		userLimit := &UserLimitInfo{

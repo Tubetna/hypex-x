@@ -66,6 +66,39 @@ func TestProbeOnlyIPNotReported(t *testing.T) {
 	}
 }
 
+// Máy đã đếm bị CGNAT đổi sang IP MỚI cùng /24 → không được chặn dù đủ limit.
+func TestCgnatSameSubnetNotRejected(t *testing.T) {
+	l := newTestLimiter(&panel.AliveMap{
+		Alive: map[int]int{7: 2},
+		IPs:   map[int][]string{7: {"222.188.99.85", "171.218.86.25"}},
+	})
+	// IP mới toanh 222.188.99.200 — panel CHƯA thấy, nhưng cùng /24 với .85
+	if _, reject := l.CheckLimit("node|u7", "222.188.99.200", true, true); reject {
+		t.Fatal("IP mới cùng /24 với máy đã đếm bị chặn (CGNAT đổi IP)")
+	}
+	// IP ở dải thứ ba hoàn toàn thì vẫn chặn
+	if _, reject := l.CheckLimit("node|u7", "8.8.8.8", true, true); !reject {
+		t.Fatal("IP dải lạ khi đã đủ thiết bị mà không bị chặn")
+	}
+}
+
+func TestSubnetKey(t *testing.T) {
+	cases := map[string]string{
+		"222.188.99.85":  "222.188.99.0/24",
+		"222.188.99.200": "222.188.99.0/24",
+		"1.2.3.4":        "1.2.3.0/24",
+	}
+	for ip, want := range cases {
+		if got := subnetKey(ip); got != want {
+			t.Errorf("subnetKey(%s)=%s, muốn %s", ip, got, want)
+		}
+	}
+	// hai IPv6 cùng /64
+	if subnetKey("2001:db8:1:2:3:4:5:6") != subnetKey("2001:db8:1:2:ffff:ffff:ffff:ffff") {
+		t.Error("hai IPv6 cùng /64 phải cho cùng khoá")
+	}
+}
+
 func TestIsProbeHost(t *testing.T) {
 	for _, h := range []string{"www.gstatic.com", "WWW.GSTATIC.COM.", "cp.cloudflare.com", "captive.apple.com"} {
 		if !IsProbeHost(h) {
