@@ -215,6 +215,20 @@ chỉ còn group đang chọn trong ô. Node từng phục vụ 1224 khách tụ
 
 ---
 
+**Node không có IPv6 thì phải sniff QUIC (v1.0.4, 11/09/2026).** Triệu chứng: khách
+Shadowrocket/iPhone "không load được ảnh Facebook", còn Hiddify/sing-box thì bình
+thường. iPhone trên mạng di động VN nhận AAAA, app Facebook đi HTTP/3 (QUIC), Shadowrocket
+chuyển nguyên **IP đích IPv6 + UDP 443** xuống node. Xray gốc chỉ sniff `http`+`tls`
+nên TCP còn được đổi sang tên miền, **UDP thì không** → node không có IPv6 → gói rơi im
+lặng, không một dòng log (`failed`/`unreachable` đều **0**). Soi bằng
+`journalctl -u V2bX | grep -c "accepted udp:\["` — số này >0 là đang dính.
+Sửa hai chỗ: `core/xray/inbound.go` thêm `"quic"` vào `DestOverride`, và
+`config.json` → `Options.XrayOptions = {"EnableDNS": true, "DNSType": "UseIPv4"}`
+cho freedom chỉ chọn IPv4. Kiểm nhanh (không cần iPhone): xray client + `dokodemo-door`
+UDP trỏ tới IPv6 của `scontent.*.fbcdn.net`, rồi `curl --http3-only` qua nó —
+trước sửa **timeout 12 s**, sau sửa **200 / 0,28 s**. Hiddify/sing-box không dính vì
+template dùng fake-ip nên app không bao giờ thấy AAAA.
+
 ## 5. Vị trí file — đặt sai là hỏng ngầm
 
 Geo data phải nằm cùng `config.json`, **không phải cùng binary**:
