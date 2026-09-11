@@ -438,6 +438,17 @@ gen_x25519() {
     press_any_key
 }
 
+# Cert va key tren dia phai cung mot cap khoa (public key giong nhau) va khong rong.
+# acme.sh --install-cert chay reloadcmd ngay; service chua co thi no tra exit 1 du
+# cert da chep xong -> ket qua that phai kiem tren dia, khong tin exit code.
+cert_key_match() {
+    [ -s "$1" ] && [ -s "$2" ] || return 1
+    local a b
+    a=$(openssl x509 -in "$1" -pubkey -noout 2>/dev/null | md5sum)
+    b=$(openssl pkey -in "$2" -pubout 2>/dev/null | md5sum)
+    [ -n "$a" ] && [ "$a" = "$b" ]
+}
+
 # Cấp chứng chỉ thật từ Let's Encrypt cho node chạy cổng 443.
 #
 # Cert tự ký không còn dùng được trong thực tế: xray-core 26.x đã xoá tuỳ chọn
@@ -579,10 +590,11 @@ gen_le_ssl() {
     [ "$INIT_SYSTEM" = "openrc" ] && reload="rc-service ${SERVICE} restart"
 
     # reloadcmd: mỗi lần acme.sh tự gia hạn thì V2bX nạp lại cert mới
-    if ! "$acme" --install-cert -d "$domain" --ecc \
+    "$acme" --install-cert -d "$domain" --ecc \
             --fullchain-file "${CONF_DIR}/cert.crt" \
             --key-file "${CONF_DIR}/private.key" \
-            --reloadcmd "$reload" &>/dev/null; then
+            --reloadcmd "$reload 2>/dev/null || true" &>/dev/null
+    if ! cert_key_match "${CONF_DIR}/cert.crt" "${CONF_DIR}/private.key"; then
         echo -e "${red}Cài chứng chỉ vào ${CONF_DIR} thất bại.${plain}"
         press_any_key; return
     fi

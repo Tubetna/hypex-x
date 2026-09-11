@@ -44,6 +44,17 @@ svc_cmd() {
     fi
 }
 
+# Cert va key tren dia phai cung mot cap khoa (public key giong nhau) va khong rong.
+# acme.sh --install-cert chay reloadcmd ngay; service chua co thi no tra exit 1 du
+# cert da chep xong -> ket qua that phai kiem tren dia, khong tin exit code.
+cert_key_match() {
+    [ -s "$1" ] && [ -s "$2" ] || return 1
+    local a b
+    a=$(openssl x509 -in "$1" -pubkey -noout 2>/dev/null | md5sum)
+    b=$(openssl pkey -in "$2" -pubout 2>/dev/null | md5sum)
+    [ -n "$a" ] && [ "$a" = "$b" ]
+}
+
 # Tim chung chi acme.sh da co san va con han tren may.
 # Box Nhat (160.16.60.76) tung co cert that nam san o /root/.acme.sh nhung bo cai
 # van tao cert tu ky de len, roi node 443 chet vi client tu choi cert tu ky.
@@ -169,11 +180,15 @@ issue_le_cert() {
     fi
 
     # reloadcmd: mỗi lần acme.sh tự gia hạn thì V2bX nạp lại cert mới
+    # Reload phải "|| true": cài mới thì service chưa có, restart lỗi làm acme trả 1.
     "$acme" --install-cert -d "$domain" --ecc \
         --fullchain-file "${CONF_DIR}/cert.crt" \
         --key-file "${CONF_DIR}/private.key" \
-        --reloadcmd "$(svc_cmd restart)" &>/dev/null \
-        || { echo -e "${red}Cài chứng chỉ vào ${CONF_DIR} thất bại.${plain}"; return 1; }
+        --reloadcmd "$(svc_cmd restart) 2>/dev/null || true" &>/dev/null
+    if ! cert_key_match "${CONF_DIR}/cert.crt" "${CONF_DIR}/private.key"; then
+        echo -e "${red}Cài chứng chỉ vào ${CONF_DIR} thất bại (cert/key trống hoặc không khớp).${plain}"
+        return 1
+    fi
 
     chmod 600 "${CONF_DIR}/private.key"
     CERT_DOMAIN="$domain"
