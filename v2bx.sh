@@ -157,6 +157,7 @@ show_menu() {
     echo -e "${cyan}║${plain}  ${purple}11.${plain} Cài BBR (tăng tốc mạng)"
     echo -e "${cyan}║${plain}  ${purple}12.${plain} Mở cổng cho Node (tường lửa)"
     echo -e "${cyan}║${plain}  ${purple}13.${plain} Chặn Speedtest"
+    echo -e "${cyan}║${plain}  ${purple}20.${plain} Ép MSS 1400 (sửa app treo do MTU, vd Xanh SM)"
     echo -e "${cyan}╠══════════════════════════════════════════════════╣${plain}"
     echo -e "${cyan}║${plain}  ${white}${bold}🔧 Cấu hình${plain}"
     echo -e "${cyan}║${plain}  ${yellow}14.${plain} Xem file cấu hình config.json"
@@ -169,7 +170,7 @@ show_menu() {
     echo -e "${cyan}║${plain}  ${red}0.${plain}  Thoát"
     echo -e "${cyan}╚══════════════════════════════════════════════════╝${plain}"
     echo ""
-    read -p "  Vui lòng nhập tùy chọn [0-19]: " choice
+    read -p "  Vui lòng nhập tùy chọn [0-20]: " choice
     handle_choice "$choice"
 }
 
@@ -194,6 +195,7 @@ handle_choice() {
     17) update_geo ;;
     18) check_device_limit ;;
     19) gen_le_ssl ;;
+    20) setup_mss_clamp ;;
     0)  echo -e "${green}Tạm biệt!${plain}"; exit 0 ;;
     *)  echo -e "${red}Lựa chọn không hợp lệ!${plain}"; sleep 1; show_menu ;;
     esac
@@ -415,6 +417,76 @@ block_speedtest() {
             || iptables -I OUTPUT -m string --string "$s" --algo bm -j DROP 2>/dev/null
     done
     echo -e "${green}Đã chặn các trang Speedtest phổ biến!${plain}"
+    press_any_key
+}
+
+# 12/09/2026: đường node -> AWS Việt Nam (166.117.0.0/16, Global Accelerator) rớt gói
+# 1500 byte mà không trả ICMP frag-needed -> app đặt trên AWS (Xanh SM...) treo ở logo,
+# Google/Facebook vẫn chạy nên rất khó nhận ra. PMTU đo được 1482. Phải ép ở CẢ INPUT:
+# rule OUTPUT chỉ ép cỡ gói server gửi về, cỡ gói node gửi đi theo SYN-ACK của server.
+setup_mss_clamp() {
+    echo -e "${yellow}Đang ép MSS 1400 + bật dò MTU (tcp_mtu_probing)...${plain}"
+    if ! command -v iptables &>/dev/null; then
+        echo -e "${red}Máy không có iptables.${plain}"; press_any_key; return
+    fi
+    cat > /etc/sysctl.d/90-v2bx-mtu.conf << 'EOF'
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_base_mss = 1200
+EOF
+    sysctl -q -p /etc/sysctl.d/90-v2bx-mtu.conf 2>/dev/null
+    cat > /usr/local/sbin/mss-clamp.sh << 'EOF'
+#!/bin/sh
+# Ep MSS moi ket noi TCP qua node xuong 1400 (PMTU toi AWS VN = 1482 -> toi da 1442).
+for t in iptables ip6tables; do
+    command -v "$t" >/dev/null 2>&1 || continue
+    for c in INPUT OUTPUT FORWARD; do
+        "$t" -t mangle -C "$c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1400 2>/dev/null || \
+        "$t" -t mangle -A "$c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1400 2>/dev/null
+    done
+done
+exit 0
+EOF
+    chmod 755 /usr/local/sbin/mss-clamp.sh
+    if command -v systemctl &>/dev/null; then
+        cat > /etc/systemd/system/mss-clamp.service << 'EOF'
+[Unit]
+Description=Clamp TCP MSS to 1400 (V2bX - duong toi AWS VN rot goi 1500)
+After=network-pre.target
+Wants=network-pre.target
+Before=network.target V2bX.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mss-clamp.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
+        systemctl enable --now mss-clamp.service &>/dev/null
+    else
+        /usr/local/sbin/mss-clamp.sh
+    fi
+    if iptables -t mangle -S INPUT 2>/dev/null | grep -q TCPMSS; then
+        echo -e "${green}Đã ép MSS 1400 ở INPUT/OUTPUT/FORWARD, bền qua reboot.${plain}"
+    else
+        echo -e "${red}Không thêm được rule TCPMSS (thiếu module xt_TCPMSS?).${plain}"
+        press_any_key; return
+    fi
+    # Nghiệm thu đúng bệnh: GET nhỏ luôn qua, chỉ POST > 1,4 KB mới lộ — phải về trong < 1 s
+    if command -v curl &>/dev/null; then
+        echo -e "${yellow}Kiểm thử POST 3 KB tới AWS Việt Nam (api-ub.vn.gsm-api.net)...${plain}"
+        local body t
+        body=$(head -c 3000 /dev/zero | tr '\0' 'a')
+        t=$(curl -4 -s -o /dev/null -m 8 -X POST --data-binary "$body" -w '%{time_total}' \
+            https://api-ub.vn.gsm-api.net/ 2>/dev/null)
+        case "$t" in
+            0.*|1.*) echo -e "${green}  ✓ ${t}s — đường tới AWS VN thông.${plain}" ;;
+            "")      echo -e "${yellow}  ⚠ Không đo được (không ra internet?).${plain}" ;;
+            *)       echo -e "${red}  ✗ ${t}s — vẫn chậm/treo, kiểm 'ping -M do -s 1452 166.117.34.35'.${plain}" ;;
+        esac
+    fi
     press_any_key
 }
 

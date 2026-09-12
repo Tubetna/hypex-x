@@ -777,6 +777,61 @@ EOF
 chmod 600 "${CONF_DIR}/config.json"
 
 # ==========================================
+# 4b. Ép MSS 1400 + dò MTU (chống app treo do đường rớt gói 1500 byte)
+# ==========================================
+# 12/09/2026: node Hanoi Telecom tới AWS Việt Nam (166.117.0.0/16, Global Accelerator)
+# rớt gói 1500 byte mà không trả ICMP frag-needed -> TCP retransmit mãi, app đặt trên AWS
+# (Xanh SM...) treo ở màn hình logo trong khi Google/Facebook vẫn chạy. PMTU đo được 1482.
+# Phải ép ở CẢ INPUT: rule OUTPUT chỉ ép cỡ gói server gửi về, cỡ gói node gửi đi theo
+# MSS trong SYN-ACK của server.
+if [ "${INIT_SYSTEM}" = "systemd" ] && command -v iptables &>/dev/null; then
+    echo -e "${yellow}Đang ép MSS 1400 + bật dò MTU...${plain}"
+    cat > /etc/sysctl.d/90-v2bx-mtu.conf << 'EOF'
+# Duong toi AWS VN rot goi 1500 byte, ICMP frag-needed khong ve -> de kernel tu ha co goi
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_base_mss = 1200
+EOF
+    sysctl -q -p /etc/sysctl.d/90-v2bx-mtu.conf 2>/dev/null
+    cat > /usr/local/sbin/mss-clamp.sh << 'EOF'
+#!/bin/sh
+# Ep MSS moi ket noi TCP qua node xuong 1400 (PMTU toi AWS VN = 1482 -> toi da 1442).
+# INPUT: SYN-ACK cua server + SYN cua khach (quyet dinh co goi node GUI DI).
+# OUTPUT/FORWARD: SYN node gui (quyet dinh co goi server GUI VE).
+for t in iptables ip6tables; do
+    command -v "$t" >/dev/null 2>&1 || continue
+    for c in INPUT OUTPUT FORWARD; do
+        "$t" -t mangle -C "$c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1400 2>/dev/null || \
+        "$t" -t mangle -A "$c" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1400 2>/dev/null
+    done
+done
+exit 0
+EOF
+    chmod 755 /usr/local/sbin/mss-clamp.sh
+    cat > /etc/systemd/system/mss-clamp.service << 'EOF'
+[Unit]
+Description=Clamp TCP MSS to 1400 (V2bX - duong toi AWS VN rot goi 1500)
+After=network-pre.target
+Wants=network-pre.target
+Before=network.target V2bX.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mss-clamp.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    if systemctl enable --now mss-clamp.service &>/dev/null \
+       && iptables -t mangle -S INPUT 2>/dev/null | grep -q TCPMSS; then
+        echo -e "${green}  ✓ Đã ép MSS 1400 (INPUT/OUTPUT/FORWARD) và bật tcp_mtu_probing.${plain}"
+    else
+        echo -e "${yellow}  ⚠ Không ép được MSS (thiếu module TCPMSS?) — app đặt trên AWS VN có thể treo.${plain}"
+    fi
+fi
+
+# ==========================================
 # 5. Cài dịch vụ
 # ==========================================
 echo -e "${yellow}Đang cấu hình dịch vụ (${INIT_SYSTEM})...${plain}"

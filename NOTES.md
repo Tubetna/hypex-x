@@ -152,6 +152,18 @@ tác dụng khi khách hoàn toàn không có traffic.
 
 ## 4. Bẫy đã dính, đừng dính lại
 
+**Đường tới AWS Việt Nam rớt gói 1500 byte, không ICMP (12/09/2026).** Node Hanoi
+Telecom `103.5.209.17/.20` → AWS Local Zone VN (`166.117.0.0/16`) và Global Accelerator
+(`75.2.x`, `15.197.x`) có PMTU **1482**; gói full-size rớt im, kernel không nhận
+frag-needed → TCP retransmit tới chết. Triệu chứng: **Xanh SM** (`api-ub.vn.gsm-api.net`)
+treo ở logo, log V2bX chỉ thấy `accepted >> direct` lặp 4–5 lần mỗi 15–40 s, `curl GET`
+từ node vẫn 404 trong 0,1 s (gói nhỏ qua được) nên trông như node khoẻ. Tái hiện bằng
+`curl -X POST --data-binary @3KB https://api-ub.vn.gsm-api.net/` → treo 8 s. Sửa: bộ cài
+bước 4b / menu 20 ép **MSS 1400 ở cả INPUT/OUTPUT/FORWARD** + `tcp_mtu_probing=1`.
+Rule chỉ ở OUTPUT **không đủ** — nó ép cỡ gói server gửi về, còn cỡ gói node gửi đi theo
+MSS trong SYN-ACK của server (đo thật: OUTPUT thôi vẫn còn 3,3 s). Muốn biết app khách
+gọi domain nào: `tcpdump -i any udp port 53` trên node — xray resolve hộ nên thấy tên miền.
+
 **`ETXTBSY` khi cài đè.** Linux không cho ghi lên file đang thực thi. Cài lại trên
 máy đã chạy V2bX là `install`/`cp` chết giữa chừng. Phải dừng dịch vụ rồi `rm -f`
 binary trước — `rm` chỉ cắt tên file, tiến trình cũ vẫn giữ inode nên không sập.
