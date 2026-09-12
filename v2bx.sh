@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ==========================================
-#   V2bX Manager - Quản lý V2bX
+#   HYX · Quản lý node V2bX  (lệnh: hyx — tên cũ v2bx / hypex-x vẫn chạy)
 #   Tác giả: Tubetna
 # ==========================================
 
@@ -13,7 +13,43 @@ purple='\033[0;35m'
 cyan='\033[0;36m'
 white='\033[1;37m'
 bold='\033[1m'
+dim='\033[2m'
 plain='\033[0m'
+
+# Bảng màu gradient 256-color: xanh ngọc → xanh dương → tím → hồng.
+# MobaXterm/xterm/Windows Terminal đều hiểu; terminal 16 màu thì hạ về cyan.
+GRAD=(51 45 39 33 27 63 99 135 171 207)
+if [ "$(tput colors 2>/dev/null || echo 8)" -lt 256 ]; then GRAD=(36 36 36 34 34 35 35 35 35 35); fi
+g()  { printf '\033[38;5;%sm' "${GRAD[$(( $1 % ${#GRAD[@]} ))]}"; }   # g <i> → mã màu thứ i
+# Tô một chuỗi theo gradient, mỗi ký tự một màu (offset $2 để làm hiệu ứng chạy)
+gtext() {
+    local str="$1" off="${2:-0}" i ch
+    for (( i=0; i<${#str}; i++ )); do
+        ch="${str:$i:1}"; printf '%s%s' "$(g $((i+off)))" "$ch"
+    done; printf '%s' "$plain"
+}
+# Hiệu ứng: chỉ khi có tty và không đặt HYX_NOANIM (SSH script/cron thì tắt)
+anim_ok() { [ -t 1 ] && [ -z "$HYX_NOANIM" ]; }
+# Spinner: spin "việc đang làm" lệnh... — chạy lệnh nền, quay cho tới khi xong
+SPIN_OUT=/tmp/.hyx_spin.log
+spin() {
+    local msg="$1"; shift
+    if ! anim_ok; then "$@" >"$SPIN_OUT" 2>&1; return $?; fi
+    local frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0 rc
+    "$@" >"$SPIN_OUT" 2>&1 & local pid=$!
+    while kill -0 $pid 2>/dev/null; do
+        printf '\r  %s%s%s %s' "$(g $i)" "${frames:$((i%10)):1}" "$plain" "$msg"
+        i=$((i+1)); sleep 0.08
+    done
+    wait $pid; rc=$?
+    printf '\r\033[K'
+    return $rc
+}
+# Đọc log có spinner: rlog "<lệnh shell>" — journal node vài trăm MB, mỗi lệnh 2–10 s
+rlog() { spin "Đọc log..." bash -c "$1"; [ -s "$SPIN_OUT" ] && cat "$SPIN_OUT" || echo -e "  ${dim}(không có dòng nào)${plain}"; }
+
+# ${#str} phải đếm ký tự chứ không phải byte thì cột chữ có dấu mới thẳng
+if [ -z "$LC_ALL" ] && locale -a 2>/dev/null | grep -qi 'C.utf8\|C.UTF-8'; then export LC_ALL=C.UTF-8; fi
 
 SERVICE="V2bX"
 BIN_DIR="/usr/bin/V2bX-bin"
@@ -105,11 +141,11 @@ detect_arch() {
 # ── Lấy trạng thái dịch vụ ──────────────
 get_status() {
     if svc_active; then
-        echo -e "${green}● Đang chạy (Active)${plain}"
+        echo -e "${green}● Đang chạy${plain}"
     elif [ -f "$BINARY" ]; then
-        echo -e "${red}● Đã dừng (Inactive)${plain}"
+        echo -e "${red}● Đã dừng${plain}"
     else
-        echo -e "${yellow}● Chưa cài đặt${plain}"
+        echo -e "${yellow}● Chưa cài${plain}"
     fi
 }
 
@@ -122,55 +158,82 @@ get_version() {
     fi
 }
 
+# ── Đọc nhanh cấu hình / cert / MSS cho header và trạng thái ──
+get_nodes() {
+    # "#25 VLESS  #26 VLESS" — đọc thẳng config.json, không cần jq
+    [ -f "$CONFIG" ] || { echo "chưa có config"; return; }
+    paste -d' ' <(grep -oE '"NodeID"\s*:\s*[0-9]+' "$CONFIG" | grep -oE '[0-9]+' | sed 's/^/#/') \
+                <(grep -oE '"NodeType"\s*:\s*"[^"]+"' "$CONFIG" | cut -d'"' -f4) | tr '\n' ' '
+}
+get_cert_info() {
+    local crt="${CONF_DIR}/cert.crt" cn exp
+    [ -s "$crt" ] || { echo "không"; return; }
+    cn=$(openssl x509 -in "$crt" -noout -subject 2>/dev/null | sed -n 's/.*CN *= *\([^,]*\).*/\1/p')
+    exp=$(openssl x509 -in "$crt" -noout -enddate 2>/dev/null | cut -d= -f2 | awk '{print $2" "$1" "$4}')
+    if openssl x509 -in "$crt" -noout -issuer 2>/dev/null | grep -qi "let's encrypt"; then
+        openssl x509 -in "$crt" -noout -checkend 604800 &>/dev/null \
+            && echo -e "${cn} ${dim}· hết hạn ${exp}${plain}" \
+            || echo -e "${red}${cn} · SẮP HẾT HẠN ${exp}${plain}"
+    else
+        echo -e "${yellow}tự ký (${cn})${plain}"
+    fi
+}
+get_mss_status() {
+    if iptables -t mangle -S INPUT 2>/dev/null | grep -q TCPMSS; then
+        echo -e "${green}✓ ép 1400${plain}"
+    else
+        echo -e "${yellow}✗ chưa ép${plain} ${dim}(menu 20)${plain}"
+    fi
+}
+
 # ── Header ───────────────────────────────
+HYX_FIRST=1
 show_header() {
     clear
     detect_arch
-    echo -e "${cyan}╔══════════════════════════════════════════════════╗${plain}"
-    echo -e "${cyan}║${white}${bold}         V2bX Manager - Quản lý V2bX             ${plain}${cyan}║${plain}"
-    echo -e "${cyan}║${plain}         https://github.com/Tubetna/hypex-x          ${cyan}║${plain}"
-    echo -e "${cyan}╠══════════════════════════════════════════════════╣${plain}"
-    echo -e "${cyan}║${plain}  Trạng thái : $(get_status)"
-    echo -e "${cyan}║${plain}  Phiên bản  : ${yellow}$(get_version)${plain}"
-    echo -e "${cyan}║${plain}  Kiến trúc  : ${yellow}${ARCH_SUFFIX:-không nhận ra}${plain}"
-    echo -e "${cyan}╠══════════════════════════════════════════════════╣${plain}"
+    local title='HYX'
+    local sub=' · node V2bX'
+    if [ "$HYX_FIRST" = 1 ] && anim_ok; then
+        # Quét gradient qua chữ 8 khung hình rồi dừng — chỉ lần mở đầu
+        local f
+        for f in 7 6 5 4 3 2 1 0; do
+            printf '\r  %s%s%s%s' "$bold" "$(gtext "$title" $f)" "$dim" "$sub"
+            sleep 0.05
+        done; echo -e "$plain"
+    else
+        echo -e "  ${bold}$(gtext "$title")${dim}${sub}${plain}"
+    fi
+    HYX_FIRST=0
+    echo -e "  $(g 0)────────────────────────────────────────────────────${plain}"
+    echo -e "  $(get_status)  ${dim}$(get_version | sed 's/ (.*//') · ${ARCH_SUFFIX:-?}${plain}"
+    echo -e "  ${dim}Node${plain}  ${yellow}$(get_nodes)${plain}"
+    echo -e "  ${dim}Cert${plain}  $(get_cert_info)"
+    echo -e "  ${dim}MSS ${plain}  $(get_mss_status)"
+    echo -e "  $(g 9)────────────────────────────────────────────────────${plain}"
+}
+
+# Một mục menu: số tô gradient, chữ ngắn. Đệm bằng tay theo số ký tự — printf %-Ns
+# đệm theo byte nên chữ có dấu bị hụt, cột lệch.
+m() {
+    local w=${4:-16} pad
+    pad=$(( w - ${#3} )); [ $pad -lt 1 ] && pad=1
+    printf '%s%s%2s%s %s%*s' "$bold" "$(g $1)" "$2" "$plain" "$3" "$pad" ''
 }
 
 # ── Menu chính ───────────────────────────
 show_menu() {
     show_header
-    echo -e "${cyan}║${plain}  ${white}${bold}⚙  Cài đặt & Cập nhật${plain}"
-    echo -e "${cyan}║${plain}  ${green}1.${plain}  Cài đặt V2bX"
-    echo -e "${cyan}║${plain}  ${green}2.${plain}  Cập nhật V2bX"
-    echo -e "${cyan}║${plain}  ${green}3.${plain}  Gỡ cài đặt V2bX"
-    echo -e "${cyan}╠══════════════════════════════════════════════════╣${plain}"
-    echo -e "${cyan}║${plain}  ${white}${bold}▶  Điều khiển dịch vụ${plain}"
-    echo -e "${cyan}║${plain}  ${blue}4.${plain}  Khởi động V2bX"
-    echo -e "${cyan}║${plain}  ${blue}5.${plain}  Dừng V2bX"
-    echo -e "${cyan}║${plain}  ${blue}6.${plain}  Khởi động lại V2bX"
-    echo -e "${cyan}║${plain}  ${blue}7.${plain}  Kiểm tra trạng thái"
-    echo -e "${cyan}║${plain}  ${blue}8.${plain}  Xem nhật ký (log) realtime"
-    echo -e "${cyan}╠══════════════════════════════════════════════════╣${plain}"
-    echo -e "${cyan}║${plain}  ${white}${bold}⚡ Hệ thống & Tối ưu${plain}"
-    echo -e "${cyan}║${plain}  ${purple}9.${plain}  Bật tự khởi động cùng hệ thống"
-    echo -e "${cyan}║${plain}  ${purple}10.${plain} Tắt tự khởi động cùng hệ thống"
-    echo -e "${cyan}║${plain}  ${purple}11.${plain} Cài BBR (tăng tốc mạng)"
-    echo -e "${cyan}║${plain}  ${purple}12.${plain} Mở cổng cho Node (tường lửa)"
-    echo -e "${cyan}║${plain}  ${purple}13.${plain} Chặn Speedtest"
-    echo -e "${cyan}║${plain}  ${purple}20.${plain} Ép MSS 1400 (sửa app treo do MTU, vd Xanh SM)"
-    echo -e "${cyan}╠══════════════════════════════════════════════════╣${plain}"
-    echo -e "${cyan}║${plain}  ${white}${bold}🔧 Cấu hình${plain}"
-    echo -e "${cyan}║${plain}  ${yellow}14.${plain} Xem file cấu hình config.json"
-    echo -e "${cyan}║${plain}  ${yellow}15.${plain} Tạo cặp khóa X25519 (VLESS Reality)"
-    echo -e "${cyan}║${plain}  ${yellow}16.${plain} Tạo chứng chỉ SSL tự ký"
-    echo -e "${cyan}║${plain}  ${yellow}17.${plain} Cập nhật dữ liệu geo (geoip/geosite)"
-    echo -e "${cyan}║${plain}  ${yellow}18.${plain} Kiểm tra giới hạn thiết bị"
-    echo -e "${cyan}║${plain}  ${yellow}19.${plain} Cấp chứng chỉ SSL thật (Let's Encrypt)"
-    echo -e "${cyan}╠══════════════════════════════════════════════════╣${plain}"
-    echo -e "${cyan}║${plain}  ${red}0.${plain}  Thoát"
-    echo -e "${cyan}╚══════════════════════════════════════════════════╝${plain}"
+    echo -e "  $(m 0 1 'Cài')$(m 1 2 'Cập nhật')$(m 2 3 'Gỡ')"
+    echo -e "  $(m 3 4 'Bật')$(m 4 5 'Dừng')$(m 5 6 'Khởi động lại')"
+    echo -e "  $(m 6 7 'Trạng thái')$(m 7 8 'Log')$(m 8 14 'Config')"
     echo ""
-    read -p "  Vui lòng nhập tùy chọn [0-20]: " choice
+    echo -e "  $(m 1 9 'Tự chạy: bật')$(m 2 10 'Tự chạy: tắt')$(m 3 11 'BBR')"
+    echo -e "  $(m 4 12 'Mở cổng')$(m 5 13 'Chặn speedtest')$(m 6 20 'Ép MSS 1400')"
+    echo ""
+    echo -e "  $(m 7 19 'Cert LE')$(m 8 16 'Cert tự ký')$(m 9 15 'Khóa X25519')"
+    echo -e "  $(m 0 17 'Geo')$(m 1 18 'Giới hạn TB')$(m 2 0 'Thoát')"
+    echo ""
+    read -p "  ❯ " choice
     handle_choice "$choice"
 }
 
@@ -197,14 +260,13 @@ handle_choice() {
     19) gen_le_ssl ;;
     20) setup_mss_clamp ;;
     0)  echo -e "${green}Tạm biệt!${plain}"; exit 0 ;;
-    *)  echo -e "${red}Lựa chọn không hợp lệ!${plain}"; sleep 1; show_menu ;;
+    *)  echo -e "  ${red}Không có mục này.${plain}"; sleep 0.7; show_menu ;;
     esac
 }
 
 # ── Các hàm xử lý ───────────────────────
 
 install_v2bx() {
-    echo -e "${yellow}Đang tải script cài đặt...${plain}"
     bash <(curl -fLs "$INSTALL_SCRIPT")
     press_any_key
 }
@@ -216,10 +278,9 @@ update_v2bx() {
         press_any_key; return
     fi
 
-    echo -e "${yellow}Đang cập nhật V2bX cho ${ARCH_SUFFIX}...${plain}"
     local tmp; tmp=$(mktemp -d /tmp/v2bx-up.XXXXXX) || { echo -e "${red}Lỗi thư mục tạm.${plain}"; press_any_key; return; }
 
-    if ! curl -fL --retry 3 --connect-timeout 15 --progress-bar \
+    if ! spin "Tải V2bX ${ARCH_SUFFIX}..." curl -fL --retry 3 --connect-timeout 15 -s \
             -o "${tmp}/v2bx.zip" "${BASE_URL}/V2bX-${ARCH_SUFFIX}.zip"; then
         echo -e "${red}Tải file thất bại!${plain}"; rm -rf "$tmp"; press_any_key; return
     fi
@@ -252,17 +313,28 @@ update_v2bx() {
     done
 
     svc start
-    sleep 3
+    spin "Khởi động lại V2bX..." sleep 3
     if svc_active; then
         rm -f "${BINARY}.bak"
-        echo -e "${green}Cập nhật thành công! $(get_version)${plain}"
+        echo -e "  ${green}✓ Cập nhật xong · $(get_version | sed 's/ (.*//')${plain}"
+        # Kéo luôn script menu mới để có các mục vừa thêm (mss, log...)
+        if curl -fsL --connect-timeout 15 -o /usr/local/bin/hyx.new "${SCRIPT_URL}/v2bx.sh" \
+           && bash -n /usr/local/bin/hyx.new 2>/dev/null; then
+            mv -f /usr/local/bin/hyx.new /usr/local/bin/hyx
+            chmod +x /usr/local/bin/hyx
+            ln -sf /usr/local/bin/hyx /usr/local/bin/v2bx
+            ln -sf /usr/local/bin/hyx /usr/local/bin/hypex-x
+            echo -e "${green}Đã cập nhật lệnh hyx.${plain}"
+        else
+            rm -f /usr/local/bin/hyx.new
+        fi
     else
         if [ -f "${BINARY}.bak" ]; then
             mv -f "${BINARY}.bak" "$BINARY"
             svc start
             echo -e "${red}Bản mới không khởi động được — đã tự lùi về bản cũ.${plain}"
         else
-            echo -e "${red}Cập nhật xong nhưng dịch vụ không chạy. Xem log ở mục 8.${plain}"
+            echo -e "${red}Cập nhật xong nhưng dịch vụ không chạy. Xem log: menu 8 → 5.${plain}"
         fi
     fi
     rm -rf "$tmp"
@@ -289,10 +361,34 @@ stop_v2bx()    { svc stop;    echo -e "${yellow}Đã dừng V2bX!${plain}";     
 restart_v2bx() { svc restart; echo -e "${green}Đã khởi động lại V2bX!${plain}";  press_any_key; }
 
 status_v2bx() {
+    echo -e "  Dịch vụ      $(get_status)"
     if [ "${INIT_SYSTEM}" = "systemd" ]; then
-        systemctl status $SERVICE --no-pager
-    else
-        rc-service $SERVICE status
+        local since mem
+        since=$(systemctl show $SERVICE -p ActiveEnterTimestamp --value 2>/dev/null | cut -d' ' -f2-3)
+        mem=$(systemctl show $SERVICE -p MemoryCurrent --value 2>/dev/null)
+        [ -n "$since" ] && echo -e "  Chạy từ      ${since}"
+        [[ "$mem" =~ ^[0-9]+$ ]] && echo -e "  RAM          $((mem/1024/1024)) MB"
+    fi
+    echo -e "  Phiên bản    $(get_version | sed 's/ (.*//')"
+    echo -e "  Node         ${yellow}$(get_nodes)${plain}"
+    echo -e "  Panel        $(grep -oE '"ApiHost"[^,]*' "$CONFIG" 2>/dev/null | head -1 | cut -d'"' -f4)"
+    echo -e "  Chứng chỉ    $(get_cert_info)"
+    echo -e "  MSS/MTU      $(get_mss_status)"
+    local ports
+    ports=$( { ss -lntp 2>/dev/null | grep -i v2bx | awk '{print $4}'; ss -lnup 2>/dev/null | grep -i v2bx | awk '{print $5}'; } \
+             | sed 's/.*://' | awk '$1 ~ /^[0-9]+$/ && $1<32768' | sort -un | tr '\n' ' ')
+    echo -e "  Cổng nghe    ${ports:-${red}không có — node chưa lên hoặc chưa kéo được cấu hình${plain}}"
+    if [ "${INIT_SYSTEM}" = "systemd" ]; then
+        local conn errs
+        rlog "journalctl -u $SERVICE --since -5min -o cat --grep accepted 2>/dev/null | wc -l; \
+              journalctl -u $SERVICE --since -1h -o cat --grep 'level=error|failed|thất bại|panic' 2>/dev/null | wc -l" >/dev/null
+        conn=$(sed -n 1p "$SPIN_OUT"); errs=$(sed -n 2p "$SPIN_OUT"); errs=${errs:-0}
+        echo -e "  5 phút qua   ${conn} kết nối khách"
+        if [ "$errs" -gt 0 ]; then
+            echo -e "  1 giờ qua    ${red}${errs} dòng lỗi${plain} ${dim}(8 → 3)${plain}"
+        else
+            echo -e "  1 giờ qua    ${green}không lỗi${plain}"
+        fi
     fi
     check_port_rivals
     press_any_key
@@ -323,14 +419,42 @@ check_port_rivals() {
     fi
 }
 
+# Log V2bX 95% là dòng "accepted" của khách — journal vài trăm MB, đọc 6 h mất >30 s.
+# Dùng --grep của journalctl (lọc lúc đọc), phạm vi ngắn, và spinner cho khỏi tưởng treo.
+JL="journalctl -q -u $SERVICE --no-pager -o short"
 log_v2bx() {
-    echo -e "${yellow}Đang xem log... (nhấn Ctrl+C để thoát)${plain}"
-    if [ "${INIT_SYSTEM}" = "systemd" ]; then
-        journalctl -u $SERVICE -f
-    else
-        tail -f /var/log/V2bX.log
-    fi
-    show_menu
+    local isd=1; [ "${INIT_SYSTEM}" = "systemd" ] || isd=0
+    echo -e "  $(m 0 1 'Trực tiếp')$(m 1 2 'Gần nhất')$(m 2 3 'Lỗi 1h')$(m 3 4 'Theo khách')$(m 4 5 'Lúc khởi động')"
+    read -p "  ❯ [2] " c
+    echo ""
+    case "${c:-2}" in
+        1)  echo -e "  ${dim}Ctrl+C để thoát${plain}"
+            if [ $isd = 1 ]; then journalctl -u $SERVICE -f -o short; else tail -f /var/log/V2bX.log; fi ;;
+        2)  if [ $isd = 1 ]; then rlog "$JL -n 3000 | grep -v accepted | tail -60 | cut -c1-170"
+            else grep -v accepted /var/log/V2bX.log | tail -60; fi ;;
+        3)  if [ $isd = 1 ]; then
+                rlog "$JL --since -1h --grep 'level=error|level=warn|failed|panic|Limited|thất bại' | tail -60 | cut -c1-170"
+            else grep -iE "error|warn|failed|panic|Limited" /var/log/V2bX.log | tail -60; fi
+            echo -e "\n  ${dim}'Limited … by conn or ip' = khách vượt giới hạn thiết bị, không phải lỗi node.${plain}" ;;
+        4)  read -p "  UUID / email: " who
+            [ -z "$who" ] && { press_any_key; return; }
+            if [ $isd = 1 ]; then
+                spin "Đọc log..." bash -c "$JL --since -30min --grep '$who'"
+                if [ ! -s "$SPIN_OUT" ]; then echo -e "  ${dim}Không thấy '$who' trong 30 phút qua trên node này.${plain}"
+                else
+                    echo -e "  ${dim}Kết nối theo phút (30 phút qua):${plain}"
+                    awk '{print $3}' "$SPIN_OUT" | cut -c1-5 | sort | uniq -c | tail -20
+                    echo -e "\n  ${dim}20 dòng gần nhất:${plain}"
+                    tail -20 "$SPIN_OUT" | sed -E 's/\[\[[^]]*\]-//; s/email: .*//' | cut -c1-150
+                fi
+            else grep -F "$who" /var/log/V2bX.log | tail -20; fi ;;
+        5)  if [ $isd = 1 ]; then
+                local ts; ts=$(systemctl show $SERVICE -p ActiveEnterTimestamp --value 2>/dev/null)
+                rlog "$JL --since '${ts:-1 day ago}' | grep -v accepted | head -30 | cut -c1-170"
+            else grep -v accepted /var/log/V2bX.log | head -30; fi
+            echo -e "\n  ${dim}Phải có 'Các Node đã khởi động xong' — thiếu = chưa kéo được cấu hình từ Panel.${plain}" ;;
+    esac
+    press_any_key
 }
 
 enable_autostart()  { svc enable;  echo -e "${green}Đã bật tự khởi động cùng hệ thống!${plain}";  press_any_key; }
@@ -827,7 +951,7 @@ check_device_limit() {
 
 press_any_key() {
     echo ""
-    read -p "  Nhấn Enter để quay lại menu..." dummy
+    read -p "  ${dim}Enter để về menu${plain} " dummy
     show_menu
 }
 

@@ -159,7 +159,7 @@ frag-needed → TCP retransmit tới chết. Triệu chứng: **Xanh SM** (`api-
 treo ở logo, log V2bX chỉ thấy `accepted >> direct` lặp 4–5 lần mỗi 15–40 s, `curl GET`
 từ node vẫn 404 trong 0,1 s (gói nhỏ qua được) nên trông như node khoẻ. Tái hiện bằng
 `curl -X POST --data-binary @3KB https://api-ub.vn.gsm-api.net/` → treo 8 s. Sửa: bộ cài
-bước 4b / menu 20 ép **MSS 1400 ở cả INPUT/OUTPUT/FORWARD** + `tcp_mtu_probing=1`.
+bước 6 / menu 20 (`hyx`) ép **MSS 1400 ở cả INPUT/OUTPUT/FORWARD** + `tcp_mtu_probing=1`.
 Rule chỉ ở OUTPUT **không đủ** — nó ép cỡ gói server gửi về, còn cỡ gói node gửi đi theo
 MSS trong SYN-ACK của server (đo thật: OUTPUT thôi vẫn còn 3,3 s). Muốn biết app khách
 gọi domain nào: `tcpdump -i any udp port 53` trên node — xray resolve hộ nên thấy tên miền.

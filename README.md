@@ -30,7 +30,7 @@ Bỏ `HXcfToken` thì script xác thực qua cổng 80 — khi đó tên miền 
 về IP máy này và cổng 80 phải mở. Có `HXcfToken` thì xác thực qua DNS, chạy được
 cả khi tên miền đang bật proxy Cloudflare.
 
-Cài xong gõ `v2bx` để mở menu quản lý.
+Cài xong gõ `hyx` để mở menu quản lý (`v2bx` / `hypex-x` vẫn dùng được).
 
 ### Biến điều khiển
 
@@ -134,15 +134,20 @@ Binary **liên kết tĩnh** nên không kén glibc, chạy được cả trên 
 
 ## Menu quản lý
 
-Gõ `v2bx` (Linux):
+Gõ `hyx` (Linux). Menu hàng ngang, số tô gradient, header hiện sẵn trạng thái · node · cert · MSS:
 
-| | | | |
-|---|---|---|---|
-| **1** Cài đặt | **6** Khởi động lại | **11** Cài BBR | **16** Tạo SSL tự ký |
-| **2** Cập nhật | **7** Kiểm tra trạng thái | **12** Mở cổng tường lửa | **17** Cập nhật geo |
-| **3** Gỡ cài đặt | **8** Xem log realtime | **13** Chặn Speedtest | **18** Kiểm tra giới hạn thiết bị |
-| **4** Khởi động | **9** Bật tự khởi động | **14** Xem config.json | **19** Cấp SSL thật (Let's Encrypt) |
-| **5** Dừng | **10** Tắt tự khởi động | **15** Tạo khoá X25519 | |
+| Nhóm | Mục |
+|---|---|
+| Cài đặt | **1** Cài · **2** Cập nhật · **3** Gỡ |
+| Dịch vụ | **4** Bật · **5** Dừng · **6** Khởi động lại · **7** Trạng thái · **8** Log · **14** Config |
+| Hệ thống | **9/10** Tự chạy bật/tắt · **11** BBR · **12** Mở cổng · **13** Chặn speedtest · **20** Ép MSS 1400 |
+| Chứng chỉ & khác | **19** Cert Let's Encrypt · **16** Cert tự ký · **15** Khóa X25519 · **17** Geo · **18** Giới hạn thiết bị |
+
+**Mục 8 (Log)** có menu con: trực tiếp · gần nhất (bỏ dòng `accepted` của khách) · chỉ lỗi 1 giờ · theo một khách (UUID/email, đếm kết nối theo phút) · lúc khởi động (kéo được cấu hình Panel chưa).
+
+**Mục 20 (Ép MSS 1400)** sửa lỗi app đặt trên AWS Việt Nam (Xanh SM…) treo ở logo vì đường mạng rớt gói 1500 byte — bộ cài mới đã tự làm, máy cũ chạy mục này một lần; xong tự nghiệm thu bằng POST 3 KB.
+
+Tắt hiệu ứng (spinner, gradient chạy) khi chạy qua script: `HYX_NOANIM=1 hyx`.
 
 **Mục 2 (Cập nhật)** tải đúng gói theo kiến trúc CPU của máy, **chạy thử binary mới trước khi dừng dịch vụ**, và tự lùi về bản cũ nếu bản mới không khởi động được.
 

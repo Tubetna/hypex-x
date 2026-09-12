@@ -14,7 +14,24 @@ green='\033[0;32m'
 yellow='\033[0;33m'
 blue='\033[0;34m'
 cyan='\033[0;36m'
+bold='\033[1m'
+dim='\033[2m'
 plain='\033[0m'
+
+# Gradient 256-color xanh ngọc → tím → hồng (terminal 16 màu thì hạ về cyan)
+GRAD=(51 45 39 33 27 63 99 135 171 207)
+if [ "$(tput colors 2>/dev/null || echo 8)" -lt 256 ]; then GRAD=(36 36 36 34 34 35 35 35 35 35); fi
+g() { printf '\033[38;5;%sm' "${GRAD[$(( $1 % ${#GRAD[@]} ))]}"; }
+gtext() { local str="$1" i; for (( i=0; i<${#str}; i++ )); do printf '%s%s' "$(g $i)" "${str:$i:1}"; done; printf '%s' "$plain"; }
+anim_ok() { [ -t 1 ] && [ -z "$HYX_NOANIM" ]; }
+
+# In theo bước đánh số, mỗi việc một dòng — người cài nhìn là biết đang ở đâu, hỏng chỗ nào
+STEP_N=0; STEP_TOTAL=7
+step() { STEP_N=$((STEP_N+1)); echo -e "\n$(g $((STEP_N+1)))${bold}[${STEP_N}/${STEP_TOTAL}] $1${plain}"; }
+ok()   { echo -e "  ${green}✓${plain} $1"; }
+warn() { echo -e "  ${yellow}!${plain} $1"; }
+bad()  { echo -e "  ${red}✗${plain} $1"; }
+hr()   { echo -e "${dim}  ──────────────────────────────────────────────────${plain}"; }
 
 # Cho phép trỏ sang GitHub Releases hoặc mirror riêng khi cần
 BASE_URL="${V2BX_BASE_URL:-https://github.com/Tubetna/hypex-x/releases/latest/download}"
@@ -104,15 +121,12 @@ has_saved_cf_token() {
 # In kết luận của check_cert_domain cho người cài. $1 = mã trả về, $2 = tên miền
 explain_cert_domain() {
     case "$1" in
-        0)  echo -e "${green}  ✓ ${2} trỏ thẳng về máy này (${MY_PUBLIC_IP}).${plain}" ;;
-        10) echo -e "${red}  ✗ ${2} đang bật PROXY Cloudflare (đám mây cam), trỏ tới ${DOMAIN_POINTS_TO}.${plain}"
-            echo -e "${yellow}    Xác thực qua cổng 80 chắc chắn thất bại. Và quan trọng hơn: nếu node đứng${plain}"
-            echo -e "${yellow}    sau CloudFront thì tên cần cấp là tên ORIGIN trỏ thẳng IP máy (DNS-only),${plain}"
-            echo -e "${yellow}    KHÔNG phải tên trong Host header WebSocket. Kiểm lại tên trước khi tiếp.${plain}" ;;
-        20) echo -e "${red}  ✗ ${2} trỏ về ${DOMAIN_POINTS_TO}, còn máy này là ${MY_PUBLIC_IP:-?}.${plain}"
-            echo -e "${yellow}    Cert vẫn cấp được qua DNS Cloudflare, nhưng khách/CDN sẽ nối tới IP kia${plain}"
-            echo -e "${yellow}    chứ không phải máy này. Thường là chưa đổi bản ghi DNS sang máy mới.${plain}" ;;
-        30) echo -e "${red}  ✗ Không phân giải được ${2}. Bản ghi DNS chưa có hoặc gõ sai.${plain}" ;;
+        0)  ok "${2} trỏ thẳng về máy này (${MY_PUBLIC_IP})" ;;
+        10) bad "${2} đang bật PROXY Cloudflare (đám mây cam) → ${DOMAIN_POINTS_TO}"
+            warn "Cổng 80 sẽ thất bại. Node sau CloudFront thì tên cần cấp là tên ORIGIN trỏ thẳng IP máy (DNS-only), KHÔNG phải Host header WS." ;;
+        20) bad "${2} trỏ về ${DOMAIN_POINTS_TO}, máy này là ${MY_PUBLIC_IP:-?}"
+            warn "Cert vẫn cấp được qua DNS Cloudflare, nhưng khách/CDN sẽ nối tới IP kia. Thường là chưa đổi DNS sang máy mới." ;;
+        30) bad "Không phân giải được ${2} — bản ghi DNS chưa có hoặc gõ sai" ;;
     esac
 }
 
@@ -125,7 +139,7 @@ issue_le_cert() {
 
     local acme=/root/.acme.sh/acme.sh
     if [ ! -f "$acme" ]; then
-        echo -e "${yellow}Đang cài acme.sh...${plain}"
+        echo -e "  ${dim}Cài acme.sh...${plain}"
         curl -fsS https://get.acme.sh | sh -s email="admin@${domain}" &>/dev/null \
             || { echo -e "${red}Cài acme.sh thất bại.${plain}"; return 1; }
     fi
@@ -137,15 +151,15 @@ issue_le_cert() {
     if [ -n "$cf_token" ] || has_saved_cf_token; then
         # DNS-01: chạy được cả khi tên miền đang bật proxy Cloudflare,
         # và không cần cổng 80 rảnh. Không dán token thì acme.sh dùng token đã lưu.
-        [ -z "$cf_token" ] && echo -e "${yellow}Dùng lại token Cloudflare đã lưu trong acme.sh.${plain}"
-        echo -e "${yellow}Đang xin chứng chỉ cho ${domain} (xác thực qua DNS Cloudflare)...${plain}"
+        [ -z "$cf_token" ] && ok "Dùng lại token Cloudflare đã lưu trong acme.sh"
+        echo -e "  ${dim}Xin cert cho ${domain} qua DNS Cloudflare...${plain}"
         CF_Token="$cf_token" "$acme" --issue --dns dns_cf -d "$domain" \
             --keylength ec-256 && issued=true
     else
         # HTTP-01: cần cổng 80 rảnh nên tạm dừng V2bX nếu nó đang giữ cổng
         local stopped=false
         if ss -lnt 2>/dev/null | grep -q ':80 '; then
-            echo -e "${yellow}Tạm dừng V2bX để giải phóng cổng 80...${plain}"
+            echo -e "  ${dim}Tạm dừng V2bX để lấy cổng 80...${plain}"
             eval "$(svc_cmd stop)" &>/dev/null && stopped=true
             sleep 2
         fi
@@ -154,13 +168,12 @@ issue_le_cert() {
         if ss -lnt 2>/dev/null | grep -q ':80 '; then
             local holder
             holder=$(ss -lntp 2>/dev/null | awk '$4 ~ /:80$/ {print $NF; exit}')
-            echo -e "${red}Cổng 80 vẫn đang bị chiếm: ${holder:-không rõ tiến trình}${plain}"
-            echo -e "${yellow}Dừng tiến trình đó rồi chạy lại, hoặc dùng Cloudflare API Token${plain}"
-            echo -e "${yellow}để xác thực qua DNS (không cần cổng 80).${plain}"
+            bad "Cổng 80 đang bị chiếm: ${holder:-không rõ tiến trình}"
+            warn "Dừng tiến trình đó rồi chạy lại, hoặc dùng Cloudflare API Token (xác thực DNS, không cần cổng 80)."
             [ "$stopped" = true ] && eval "$(svc_cmd start)" &>/dev/null
             return 1
         fi
-        echo -e "${yellow}Đang xin chứng chỉ cho ${domain} (xác thực qua cổng 80)...${plain}"
+        echo -e "  ${dim}Xin cert cho ${domain} qua cổng 80...${plain}"
         "$acme" --issue --standalone -d "$domain" --keylength ec-256 && issued=true
         [ "$stopped" = true ] && eval "$(svc_cmd start)" &>/dev/null
     fi
@@ -168,14 +181,13 @@ issue_le_cert() {
     # acme.sh trả mã lỗi khi cert còn hạn ("Skipping. Next renewal time is...").
     # Đó không phải lỗi — cert đã có sẵn, cứ đem đi cài là được.
     if [ "$issued" != true ] && [ -s "/root/.acme.sh/${domain}_ecc/fullchain.cer" ]; then
-        echo -e "${yellow}Tên miền này đã có chứng chỉ còn hạn, dùng lại chứng chỉ cũ.${plain}"
+        ok "Tên miền đã có cert còn hạn, dùng lại"
         issued=true
     fi
 
     if [ "$issued" != true ]; then
-        echo -e "${red}Xin chứng chỉ thất bại cho ${domain}.${plain}"
-        echo -e "${yellow}  • Qua DNS Cloudflare: API Token phải có quyền Zone:DNS:Edit.${plain}"
-        echo -e "${yellow}  • Qua cổng 80: tên miền phải trỏ đúng IP máy này và cổng 80 phải mở.${plain}"
+        bad "Xin cert thất bại cho ${domain}"
+        warn "Qua DNS Cloudflare: token phải có quyền Zone:DNS:Edit · Qua cổng 80: tên miền phải trỏ đúng IP máy, cổng 80 mở"
         return 1
     fi
 
@@ -186,15 +198,13 @@ issue_le_cert() {
         --key-file "${CONF_DIR}/private.key" \
         --reloadcmd "$(svc_cmd restart) 2>/dev/null || true" &>/dev/null
     if ! cert_key_match "${CONF_DIR}/cert.crt" "${CONF_DIR}/private.key"; then
-        echo -e "${red}Cài chứng chỉ vào ${CONF_DIR} thất bại (cert/key trống hoặc không khớp).${plain}"
+        bad "Cài cert vào ${CONF_DIR} thất bại (cert/key trống hoặc không khớp)"
         return 1
     fi
 
     chmod 600 "${CONF_DIR}/private.key"
     CERT_DOMAIN="$domain"
-    echo -e "${green}✓ Đã cấp chứng chỉ thật cho ${domain}${plain}"
-    openssl x509 -in "${CONF_DIR}/cert.crt" -noout -subject -issuer -dates 2>/dev/null | sed 's/^/  /'
-    echo -e "${green}  Tự động gia hạn đã bật sẵn (cron của acme.sh).${plain}"
+    ok "Let's Encrypt cho ${domain} · hết hạn $(openssl x509 -in "${CONF_DIR}/cert.crt" -noout -enddate 2>/dev/null | cut -d= -f2) · tự gia hạn"
     return 0
 }
 
@@ -340,7 +350,7 @@ ensure_pkg() {
     # ensure_pkg <lệnh> [tên gói]
     local cmd="$1" pkg="${2:-$1}"
     command -v "$cmd" &>/dev/null && return 0
-    echo -e "${yellow}  Đang cài '${pkg}'...${plain}"
+    echo -e "  ${dim}Cài gói '${pkg}'...${plain}"
     eval "${PKG_UPDATE}" &>/dev/null
     eval "${PKG_INSTALL} ${pkg}" &>/dev/null
     command -v "$cmd" &>/dev/null
@@ -350,16 +360,11 @@ detect_os
 detect_arch
 detect_init
 
-echo -e "${blue}===========================================${plain}"
-echo -e "${green} Cài đặt V2bX - Multi-Node & Auto SSL IP${plain}"
-echo -e "${blue}===========================================${plain}"
-echo -e "${yellow}  Hệ điều hành : ${OS_NAME:-Unknown} ${OS_VERSION}${plain}"
-echo -e "${yellow}  Kiến trúc    : ${MACHINE_ARCH} → ${ARCH_SUFFIX}${plain}"
-echo -e "${yellow}  Package Mgr  : ${PKG_MANAGER}${plain}"
-echo -e "${yellow}  Init         : ${INIT_SYSTEM}${plain}"
-[ "${IS_EULER}" = "true" ] && echo -e "${green}  ✓ EulerOS/openEuler (Huawei) — đã bật chế độ tương thích${plain}"
-echo -e "${blue}===========================================${plain}"
 echo ""
+echo -e "  ${bold}$(gtext 'HYX')${dim} · cài node V2bX${plain}"
+echo -e "  $(g 0)────────────────────────────────────────────────────${plain}"
+echo -e "  ${dim}${OS_NAME:-Linux} ${OS_VERSION} · ${ARCH_SUFFIX} · ${PKG_MANAGER} · ${INIT_SYSTEM}${plain}"
+[ "${IS_EULER}" = "true" ] && ok "EulerOS/openEuler — đã bật chế độ tương thích"
 
 # ==========================================
 # 1. Thu thập thông tin (bỏ qua được bằng export biến môi trường)
@@ -378,8 +383,9 @@ if [ -n "${NODE_ID}" ]; then
     AUTO_SSL="${AUTO_SSL:-y}"
 fi
 
+step "Thông tin Panel"
 if [ -z "$API_HOST" ]; then
-    read -p "Nhập link Panel (VD: https://panel.com): " API_HOST
+    read -p "  Link Panel (VD: https://panel.com): " API_HOST
 fi
 [ -z "$API_HOST" ] && die "Chưa nhập link Panel."
 # Bỏ dấu / thừa ở cuối, tự thêm https:// nếu người dùng chỉ gõ tên miền
@@ -387,11 +393,12 @@ API_HOST="${API_HOST%/}"
 [[ "$API_HOST" =~ ^https?:// ]] || API_HOST="https://${API_HOST}"
 
 if [ -z "$API_KEY" ]; then
-    read -p "Nhập API Key của Panel: " API_KEY
+    read -p "  API Key của Panel: " API_KEY
 fi
 [ -z "$API_KEY" ] && die "Chưa nhập API Key."
+ok "Panel ${API_HOST}"
 
-echo ""
+step "Chứng chỉ SSL"
 # Cho phép cài không cần hỏi: đặt sẵn HXdomain (và HXcfToken nếu xác thực qua DNS)
 SSL_DOMAIN="${SSL_DOMAIN:-${HXdomain:-}}"
 CF_TOKEN="${CF_TOKEN:-${HXcfToken:-}}"
@@ -411,15 +418,11 @@ elif [ -n "$AUTO_SSL" ]; then
     [[ "$AUTO_SSL" =~ ^[yY] ]] && SSL_MODE=2 || SSL_MODE=3
 else
     FOUND_CERT=$(find_existing_cert 2>/dev/null || true)
-    echo -e "${cyan}Chọn kiểu chứng chỉ SSL cho Node:${plain}"
-    echo -e "  ${green}1.${plain} Cert thật Let's Encrypt theo tên miền ${green}(khuyên dùng cho cổng 443)${plain}"
-    echo -e "  ${yellow}2.${plain} Cert tự ký theo IP  ${yellow}(client xray 26.x trở lên sẽ từ chối)${plain}"
-    echo -e "  ${blue}3.${plain} Bỏ qua, không tạo chứng chỉ"
-    if [ -n "$FOUND_CERT" ]; then
-        echo -e "${green}  → Máy này đã có chứng chỉ còn hạn cho ${FOUND_CERT}${plain}"
-        echo -e "${green}    Chọn 1 rồi Enter là dùng lại luôn, không phải xin mới.${plain}"
-    fi
-    read -p "Nhập số (1-3) [mặc định 1]: " SSL_MODE
+    echo -e "  ${green}1${plain}  Let's Encrypt theo tên miền   ${dim}(khuyên dùng cho cổng 443)${plain}"
+    echo -e "  ${yellow}2${plain}  Tự ký theo IP                 ${dim}(xray 26.x trở lên từ chối)${plain}"
+    echo -e "  ${blue}3${plain}  Không tạo chứng chỉ"
+    [ -n "$FOUND_CERT" ] && ok "Máy đã có cert còn hạn cho ${FOUND_CERT} — chọn 1 rồi Enter là dùng lại"
+    read -p "  Chọn [1-3, mặc định 1]: " SSL_MODE
     SSL_MODE="${SSL_MODE:-1}"
 fi
 
@@ -430,64 +433,64 @@ case "$SSL_MODE" in
         USE_LE=true
         if [ -z "$SSL_DOMAIN" ]; then
             if [ -n "$FOUND_CERT" ]; then
-                read -p "Nhập tên miền [Enter = dùng lại ${FOUND_CERT}]: " SSL_DOMAIN
+                read -p "  Tên miền [Enter = dùng lại ${FOUND_CERT}]: " SSL_DOMAIN
                 SSL_DOMAIN="${SSL_DOMAIN:-$FOUND_CERT}"
             else
-                read -p "Nhập tên miền trỏ về máy này (VD: node1.domain.com): " SSL_DOMAIN
+                read -p "  Tên miền trỏ về máy này (VD: node1.domain.com): " SSL_DOMAIN
             fi
         fi
         [ -z "$SSL_DOMAIN" ] && die "Chưa nhập tên miền cho chứng chỉ."
         if [ -z "$CF_TOKEN" ] && ! has_saved_cf_token; then
-            echo -e "${yellow}Nếu tên miền nằm trên Cloudflare (nhất là khi đang bật proxy),${plain}"
-            echo -e "${yellow}dán API Token có quyền Zone:DNS:Edit để xác thực qua DNS.${plain}"
-            echo -e "${yellow}Bỏ trống thì sẽ xác thực qua cổng 80 (tên miền phải trỏ thẳng về IP máy này).${plain}"
-            read -p "Cloudflare API Token (bỏ trống để dùng cổng 80): " CF_TOKEN
+            echo -e "  ${dim}Tên miền trên Cloudflare (nhất là đang bật proxy): dán API Token quyền Zone:DNS:Edit.${plain}"
+            echo -e "  ${dim}Bỏ trống = xác thực qua cổng 80 (tên miền phải trỏ thẳng IP máy này).${plain}"
+            read -p "  Cloudflare API Token [Enter = cổng 80]: " CF_TOKEN
         fi
         # Kiểm tên miền ngay tại đây, lúc còn sửa được, thay vì để acme thất bại rồi
         # âm thầm rơi về cert tự ký.
         ensure_pkg curl &>/dev/null
         for _try in 1 2 3; do
-            echo -e "${cyan}Kiểm tra ${SSL_DOMAIN}...${plain}"
+            echo -e "  ${dim}Kiểm tra ${SSL_DOMAIN}...${plain}"
             check_cert_domain "$SSL_DOMAIN"; _rc=$?
             explain_cert_domain "$_rc" "$SSL_DOMAIN"
             [ "$_rc" -eq 0 ] && break
             if [ "$_rc" -ne 30 ] && { [ -n "$CF_TOKEN" ] || has_saved_cf_token; }; then
-                read -p "Vẫn cấp cert cho tên này qua DNS Cloudflare? [y/N]: " _ok
+                read -p "  Vẫn cấp cert cho tên này qua DNS Cloudflare? [y/N]: " _ok
                 [[ "$_ok" =~ ^[yY] ]] && break
             elif [ "$_rc" -eq 10 ]; then
-                echo -e "${yellow}Tên này chỉ cấp được qua DNS Cloudflare — cần API Token.${plain}"
+                warn "Tên này chỉ cấp được qua DNS Cloudflare — cần API Token."
             fi
             [ "$_try" -eq 3 ] && die "Tên miền không hợp lệ cho máy này, dừng để anh kiểm lại DNS."
-            read -p "Nhập lại tên miền (Enter = giữ ${SSL_DOMAIN}): " _d
+            read -p "  Nhập lại tên miền [Enter = giữ ${SSL_DOMAIN}]: " _d
             [ -n "$_d" ] && SSL_DOMAIN="$_d"
             if [ -z "$CF_TOKEN" ] && ! has_saved_cf_token; then
-                read -p "Cloudflare API Token (bỏ trống nếu tên miền trỏ thẳng máy này): " CF_TOKEN
+                read -p "  Cloudflare API Token [Enter = không]: " CF_TOKEN
             fi
         done
-        echo -e "${green}==> Sẽ cấp chứng chỉ thật cho ${SSL_DOMAIN}.${plain}"
+        ok "Sẽ cấp Let's Encrypt cho ${SSL_DOMAIN}"
         ;;
     2)
         HAS_SSL=true
-        echo -e "${green}==> Sẽ tạo chứng chỉ tự ký theo IP máy chủ.${plain}"
+        warn "Sẽ tạo cert tự ký theo IP"
         ;;
     *)
-        echo -e "${blue}==> Bỏ qua bước tạo chứng chỉ.${plain}"
+        ok "Không tạo chứng chỉ"
         ;;
 esac
 
-echo ""
+step "Cấu hình Node"
 if [ -z "$NUM_NODES" ]; then
-    read -p "Bạn muốn chạy bao nhiêu Node trên máy chủ này? (VD: 2): " NUM_NODES
+    read -p "  Số Node chạy trên máy này [1]: " NUM_NODES
+    NUM_NODES="${NUM_NODES:-1}"
 fi
 if ! [[ "$NUM_NODES" =~ ^[1-9][0-9]*$ ]]; then
-    echo -e "${red}Số lượng không hợp lệ, mặc định sẽ tạo 1 Node.${plain}"
+    warn "Số lượng không hợp lệ, dùng 1 Node."
     NUM_NODES=1
 fi
 
 declare -a NODE_CONFIGS
 
 for (( i=1; i<=NUM_NODES; i++ )); do
-    echo -e "\n${yellow}--- Cấu hình cho Node thứ $i ---${plain}"
+    [ "$NUM_NODES" -gt 1 ] && echo -e "  ${dim}— Node thứ $i —${plain}"
 
     # Cài một dòng: NODE_ID + NODE_TYPE lấy thẳng từ biến môi trường, không hỏi
     if [ -n "${NODE_ID}" ]; then
@@ -496,20 +499,14 @@ for (( i=1; i<=NUM_NODES; i++ )); do
     else
         CURRENT_NODE_ID=""
         while ! [[ "$CURRENT_NODE_ID" =~ ^[0-9]+$ ]]; do
-            read -p "Nhập Node ID cho Node thứ $i: " CURRENT_NODE_ID
-            [[ "$CURRENT_NODE_ID" =~ ^[0-9]+$ ]] || echo -e "${red}  Node ID phải là số.${plain}"
+            read -p "  Node ID: " CURRENT_NODE_ID
+            [[ "$CURRENT_NODE_ID" =~ ^[0-9]+$ ]] || bad "Node ID phải là số."
         done
 
-        echo "Chọn loại Giao thức (Node Type):"
-        echo "  1. VMess          (nhân xray)"
-        echo "  2. VLESS          (nhân xray)"
-        echo "  3. Trojan         (nhân xray)"
-        echo "  4. Shadowsocks    (nhân sing)"
-        echo "  5. Hysteria2      (nhân hysteria2)"
-        echo "  6. Hysteria v1    (nhân sing)"
-        echo "  7. TUIC           (nhân sing)"
-        echo "  8. AnyTLS         (nhân sing)"
-        read -p "Nhập số (1-8): " CURRENT_TYPE_CHOICE
+        echo -e "  Giao thức:  ${green}1${plain} VMess   ${green}2${plain} VLESS   ${green}3${plain} Trojan   ${green}4${plain} Shadowsocks"
+        echo -e "              ${green}5${plain} Hysteria2   ${green}6${plain} Hysteria   ${green}7${plain} TUIC   ${green}8${plain} AnyTLS"
+        read -p "  Chọn [1-8, mặc định 2]: " CURRENT_TYPE_CHOICE
+        CURRENT_TYPE_CHOICE="${CURRENT_TYPE_CHOICE:-2}"
 
         case $CURRENT_TYPE_CHOICE in
             1) NODE_TYPE="VMess" ;;
@@ -520,8 +517,8 @@ for (( i=1; i<=NUM_NODES; i++ )); do
             6) NODE_TYPE="Hysteria" ;;
             7) NODE_TYPE="TUIC" ;;
             8) NODE_TYPE="AnyTLS" ;;
-            *) echo -e "${red}Lựa chọn không hợp lệ. Mặc định dùng VMess.${plain}"
-               NODE_TYPE="VMess" ;;
+            *) warn "Lựa chọn không hợp lệ, dùng VLESS."
+               NODE_TYPE="VLESS" ;;
         esac
     fi
 
@@ -549,7 +546,7 @@ for (( i=1; i<=NUM_NODES; i++ )); do
     Chỉ nhận: VMess, VLESS, Trojan, Shadowsocks, Hysteria2, Hysteria, TUIC, AnyTLS" ;;
     esac
 
-    echo -e "${green}==> Đã tự động gán Core [ ${CORE} ] cho giao thức [ ${NODE_TYPE} ]${plain}"
+    ok "Node #${CURRENT_NODE_ID} · ${NODE_TYPE} · nhân ${CORE}"
 
     if [ "$HAS_SSL" = true ] || [ "$USE_LE" = true ]; then
         CERT_JSON=",
@@ -590,11 +587,12 @@ done
 # ==========================================
 # 2. Chuẩn bị thư mục + chứng chỉ SSL
 # ==========================================
-echo -e "\n${yellow}Đang tạo thư mục và môi trường...${plain}"
+step "Môi trường & chứng chỉ"
 mkdir -p "${CONF_DIR}" "${BIN_DIR}"
 
 ensure_pkg curl || die "Không cài được curl."
 ensure_pkg unzip || die "Không cài được unzip."
+ok "Thư mục ${CONF_DIR} · curl · unzip"
 
 if [ "$USE_LE" = true ]; then
     ensure_pkg openssl || die "Không cài được openssl."
@@ -602,16 +600,16 @@ if [ "$USE_LE" = true ]; then
         # Cài không hỏi (HXdomain đặt sẵn) mà cert hỏng thì dừng hẳn — để node 443
         # chạy với cert tự ký là CloudFront 502 âm thầm, tệ hơn dừng cài.
         [ "${SSL_PRESET:-}" = true ] && die "Không cấp được cert cho ${SSL_DOMAIN}. Kiểm lại DNS/token rồi chạy lại."
-        echo -e "${red}Không cấp được cert thật cho ${SSL_DOMAIN}.${plain}"
-        echo -e "  ${green}1.${plain} Nhập lại tên miền / token rồi thử lại"
-        echo -e "  ${yellow}2.${plain} Tạm dùng cert tự ký theo IP ${red}(node 443 sẽ 502 qua CloudFront)${plain}"
-        echo -e "  ${blue}3.${plain} Dừng cài"
-        read -p "Chọn (1-3) [mặc định 1]: " _c
+        bad "Không cấp được cert thật cho ${SSL_DOMAIN}"
+        echo -e "  ${green}1${plain}  Nhập lại tên miền / token rồi thử lại"
+        echo -e "  ${yellow}2${plain}  Tạm dùng cert tự ký theo IP ${red}(node 443 sẽ 502 qua CloudFront)${plain}"
+        echo -e "  ${blue}3${plain}  Dừng cài"
+        read -p "  Chọn [1-3, mặc định 1]: " _c
         case "${_c:-1}" in
             2) HAS_SSL=true ;;
             3) die "Dừng theo yêu cầu." ;;
-            *) read -p "Tên miền (Enter = giữ ${SSL_DOMAIN}): " _d; [ -n "$_d" ] && SSL_DOMAIN="$_d"
-               read -p "Cloudflare API Token (Enter = giữ như cũ): " _t; [ -n "$_t" ] && CF_TOKEN="$_t"
+            *) read -p "  Tên miền [Enter = giữ ${SSL_DOMAIN}]: " _d; [ -n "$_d" ] && SSL_DOMAIN="$_d"
+               read -p "  Cloudflare API Token [Enter = giữ như cũ]: " _t; [ -n "$_t" ] && CF_TOKEN="$_t"
                issue_le_cert "$SSL_DOMAIN" "$CF_TOKEN" || die "Vẫn không cấp được cert. Dừng để anh kiểm lại DNS/token." ;;
         esac
     fi
@@ -619,7 +617,6 @@ fi
 
 if [ "$HAS_SSL" = true ]; then
     ensure_pkg openssl || die "Không cài được openssl."
-    echo -e "${yellow}Đang tạo chứng chỉ SSL (Self-signed) cho IP...${plain}"
     # -f để curl trả lỗi khi HTTP 4xx/5xx, không thì nó trả chuỗi rỗng mà vẫn exit 0
     # và CN của chứng chỉ sẽ trống -> openssl từ chối
     SERVER_IP=$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null \
@@ -632,11 +629,8 @@ if [ "$HAS_SSL" = true ]; then
         -subj "/C=VN/ST=Server/L=Server/O=V2bX/OU=Node/CN=${SERVER_IP}" 2>/dev/null \
         || die "Tạo chứng chỉ SSL thất bại."
     chmod 600 "${CONF_DIR}/private.key"
-    echo -e "${green}Đã tạo SSL cho IP ${SERVER_IP} tại ${CONF_DIR}/cert.crt${plain}"
-    echo -e "${yellow}  Lưu ý: đây là cert tự ký. Client xray 26.x trở lên KHÔNG chấp nhận nữa${plain}"
-    echo -e "${yellow}  ('allowInsecure' đã bị xoá khỏi xray-core), và CDN như CloudFront cũng${plain}"
-    echo -e "${yellow}  từ chối origin HTTPS không có cert hợp lệ. Node chạy 443 nên cấp cert thật:${plain}"
-    echo -e "${cyan}    v2bx${plain}${yellow} → chọn 19${plain}"
+    ok "Cert tự ký cho IP ${SERVER_IP}"
+    warn "xray 26.x+ và CloudFront từ chối cert tự ký — node 443 nên cấp cert thật: ${cyan}hyx${plain} → 19"
 fi
 
 # ==========================================
@@ -647,18 +641,18 @@ BINARY_URL="${BASE_URL}/${ZIP_NAME}"
 TMP_DIR=$(mktemp -d /tmp/v2bx-install.XXXXXX) || die "Không tạo được thư mục tạm."
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-echo -e "\n${yellow}Đang tải V2bX cho ${ARCH_SUFFIX}...${plain}"
-echo -e "${cyan}  ${BINARY_URL}${plain}"
+step "Tải V2bX"
+echo -e "  ${dim}${BINARY_URL}${plain}"
 
 # Dùng curl có kiểm chứng chỉ TLS (KHÔNG dùng --insecure: đây là binary chạy quyền root)
+_prog="-sS"; anim_ok && _prog="--progress-bar"
 if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 \
-        --progress-bar -o "${TMP_DIR}/v2bx.zip" "${BINARY_URL}"; then
+        ${_prog} -o "${TMP_DIR}/v2bx.zip" "${BINARY_URL}"; then
     die "Không tải được ${ZIP_NAME}. Kiểm tra mạng, hoặc đặt V2BX_BASE_URL trỏ sang mirror khác."
 fi
 
 [ -s "${TMP_DIR}/v2bx.zip" ] || die "File tải về rỗng."
 
-echo -e "${yellow}Đang giải nén...${plain}"
 unzip -oq "${TMP_DIR}/v2bx.zip" -d "${TMP_DIR}/x" || die "Giải nén thất bại (file hỏng?)."
 
 # Zip build ra có thể phẳng hoặc nằm trong 1 thư mục con — tìm binary ở cả hai kiểu
@@ -685,15 +679,14 @@ install -m 755 "${SRC_BIN}" "${BIN}" || die "Không chép được binary vào $
 if command -v getenforce &>/dev/null; then
     SELINUX_STATUS=$(getenforce 2>/dev/null || echo Disabled)
     if [ "${SELINUX_STATUS}" != "Disabled" ]; then
-        echo -e "${yellow}Phát hiện SELinux (${SELINUX_STATUS}), đang gán nhãn cho binary...${plain}"
         # semanage ghi vào policy nên nhãn sống sót qua relabel; chcon chỉ tạm thời
         if command -v semanage &>/dev/null; then
             semanage fcontext -a -t bin_t "${BIN_DIR}(/.*)?" 2>/dev/null
             restorecon -R "${BIN_DIR}" 2>/dev/null \
-                && echo -e "${green}  ✓ Đã gán nhãn bền vững bằng semanage.${plain}"
+                && ok "SELinux ${SELINUX_STATUS}: đã gán nhãn binary (semanage)"
         elif command -v chcon &>/dev/null; then
             chcon -R -t bin_t "${BIN_DIR}" 2>/dev/null \
-                && echo -e "${yellow}  ✓ Đã gán nhãn tạm bằng chcon (mất sau khi relabel hệ thống).${plain}"
+                && warn "SELinux ${SELINUX_STATUS}: gán nhãn tạm bằng chcon (mất khi relabel)"
         fi
     fi
 fi
@@ -702,7 +695,6 @@ fi
 # Xray đọc geo từ AssetPath, mặc định là /etc/V2bX/ (conf/xray.go).
 # sing-box dùng geoip.db/geosite.db trong thư mục làm việc, cũng là /etc/V2bX.
 # Thiếu mấy file này thì mọi rule geoip:/geosite: từ Panel đều lỗi.
-echo -e "${yellow}Đang cài dữ liệu geo vào ${CONF_DIR}...${plain}"
 GEO_OK=0
 for g in geoip.dat geosite.dat geoip.db geosite.db; do
     if [ -f "${SRC_DIR}/${g}" ]; then
@@ -710,9 +702,9 @@ for g in geoip.dat geosite.dat geoip.db geosite.db; do
     fi
 done
 if [ "${GEO_OK}" -gt 0 ]; then
-    echo -e "${green}  ✓ Đã cài ${GEO_OK}/4 file geo.${plain}"
+    ok "Dữ liệu geo ${GEO_OK}/4 file"
 else
-    echo -e "${yellow}  ⚠ Gói tải về không kèm geo — rule geoip:/geosite: từ Panel sẽ không chạy.${plain}"
+    warn "Gói không kèm geo — rule geoip:/geosite: từ Panel sẽ không chạy"
 fi
 
 # File mẫu, chỉ chép khi chưa có, không đè của người dùng
@@ -730,17 +722,16 @@ if ! "${BIN}" version &>/dev/null; then
     die "Binary ${ARCH_SUFFIX} không chạy được trên máy này (sai kiến trúc?)."
 fi
 rm -f "${BIN}.bak"
-echo -e "${green}✓ Binary hoạt động: $(${BIN} version 2>/dev/null | tail -1)${plain}"
+ok "$(${BIN} version 2>/dev/null | tail -1 | sed 's/ (.*//')"
 
 # ==========================================
 # 4. Ghi file cấu hình
 # ==========================================
+step "Ghi cấu hình & dịch vụ"
 if [ -f "${CONF_DIR}/config.json" ]; then
     cp -f "${CONF_DIR}/config.json" "${CONF_DIR}/config.json.bak.$(date +%Y%m%d%H%M%S)"
-    echo -e "${yellow}Đã sao lưu config.json cũ.${plain}"
+    ok "Đã sao lưu config.json cũ"
 fi
-
-echo -e "${yellow}Đang tạo file cấu hình config.json...${plain}"
 cat > "${CONF_DIR}/config.json" << EOF
 {
   "Log": {
@@ -775,6 +766,7 @@ ${NODES_JSON_ARRAY}
 }
 EOF
 chmod 600 "${CONF_DIR}/config.json"
+ok "config.json (${NUM_NODES} node)"
 
 # ==========================================
 # 4b. Ép MSS 1400 + dò MTU (chống app treo do đường rớt gói 1500 byte)
@@ -785,7 +777,6 @@ chmod 600 "${CONF_DIR}/config.json"
 # Phải ép ở CẢ INPUT: rule OUTPUT chỉ ép cỡ gói server gửi về, cỡ gói node gửi đi theo
 # MSS trong SYN-ACK của server.
 if [ "${INIT_SYSTEM}" = "systemd" ] && command -v iptables &>/dev/null; then
-    echo -e "${yellow}Đang ép MSS 1400 + bật dò MTU...${plain}"
     cat > /etc/sysctl.d/90-v2bx-mtu.conf << 'EOF'
 # Duong toi AWS VN rot goi 1500 byte, ICMP frag-needed khong ve -> de kernel tu ha co goi
 net.ipv4.tcp_mtu_probing = 1
@@ -825,16 +816,15 @@ EOF
     systemctl daemon-reload
     if systemctl enable --now mss-clamp.service &>/dev/null \
        && iptables -t mangle -S INPUT 2>/dev/null | grep -q TCPMSS; then
-        echo -e "${green}  ✓ Đã ép MSS 1400 (INPUT/OUTPUT/FORWARD) và bật tcp_mtu_probing.${plain}"
+        MSS_OK=true; ok "Ép MSS 1400 + tcp_mtu_probing (chống app treo do MTU)"
     else
-        echo -e "${yellow}  ⚠ Không ép được MSS (thiếu module TCPMSS?) — app đặt trên AWS VN có thể treo.${plain}"
+        MSS_OK=false; warn "Không ép được MSS (thiếu module TCPMSS?) — app trên AWS VN có thể treo"
     fi
 fi
 
 # ==========================================
 # 5. Cài dịch vụ
 # ==========================================
-echo -e "${yellow}Đang cấu hình dịch vụ (${INIT_SYSTEM})...${plain}"
 
 if [ "${INIT_SYSTEM}" = "systemd" ]; then
     cat > /etc/systemd/system/V2bX.service << SVCEOF
@@ -862,9 +852,11 @@ WantedBy=multi-user.target
 SVCEOF
     systemctl daemon-reload
     systemctl enable V2bX &>/dev/null
+    INSTALL_T0=$(date '+%Y-%m-%d %H:%M:%S')
     systemctl restart V2bX
     SVC_CHECK="systemctl is-active --quiet V2bX"
-    LOG_CMD="journalctl -u V2bX -n 30 --no-pager"
+    LOG_CMD="journalctl -u V2bX --since '${INSTALL_T0}' --no-pager -o cat"
+    ok "Dịch vụ systemd V2bX (Restart=always)"
 else
     # OpenRC (Alpine…)
     cat > /etc/init.d/V2bX << 'RCEOF'
@@ -889,29 +881,97 @@ RCEOF
     rc-update add V2bX default &>/dev/null
     rc-service V2bX restart
     SVC_CHECK="rc-service V2bX status >/dev/null 2>&1"
-    LOG_CMD="tail -n 30 /var/log/V2bX.log"
+    LOG_CMD="tail -n 80 /var/log/V2bX.log"
+    ok "Dịch vụ OpenRC V2bX"
 fi
 
 # ==========================================
 # 6. Kiểm tra
 # ==========================================
-echo -e "\n${yellow}Đang kiểm tra tiến trình hoạt động (đợi 5 giây)...${plain}"
-sleep 5
+step "Kiểm tra"
+# Đợi tối đa 20 s cho V2bX kéo cấu hình từ Panel — dừng sớm khi thấy "khởi động xong"
+# hoặc thấy lỗi, khỏi bắt người cài ngồi đếm.
+SVC_OK=false; PANEL_OK=false
+_frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+for _i in $(seq 1 60); do
+    if anim_ok; then printf '\r  %s%s%s Đợi V2bX kéo cấu hình từ Panel...' "$(g $_i)" "${_frames:$((_i%10)):1}" "$plain"; fi
+    sleep 0.33
+    if [ $((_i % 3)) -eq 0 ] && eval "${SVC_CHECK}"; then
+        SVC_OK=true
+        _log=$(eval "${LOG_CMD}" 2>/dev/null)
+        echo "$_log" | grep -q "Các Node đã khởi động xong" && { PANEL_OK=true; break; }
+        echo "$_log" | grep -qiE "level=error|thất bại|failed|panic" && break
+    fi
+done
+printf '\r\033[K'
 
-echo -e "${green}==========================================${plain}"
-if eval "${SVC_CHECK}"; then
-    echo -e "Trạng thái: ${green}Đang chạy (Active)${plain}"
-    if eval "${LOG_CMD}" 2>/dev/null | grep -qi "Các Node đã khởi động xong"; then
-        echo -e "Kết nối Panel: ${green}Thành công! Đã tải cấu hình từ Panel.${plain}"
+# Rút gọn log lỗi: bỏ dòng "accepted" của khách, chỉ giữ error/fail, cắt ngắn.
+# Kèm gợi ý nguyên nhân cho các lỗi hay gặp — đọc log thô của Go rất khó đoán.
+show_errors() {
+    local errs
+    # Dòng log Go dài 300+ ký tự: cắt time="…", tag="…", chỉ giữ msg + err rồi rút gọn
+    errs=$(eval "${LOG_CMD}" 2>/dev/null | grep -v accepted \
+        | grep -iE "level=error|level=fatal|error|thất bại|failed|panic" | tail -6 \
+        | sed -E 's/^time="[^"]*" +//; s/ +tag="[^"]*"//; s/level=(error|fatal) +//; s/\\"/"/g' \
+        | sed -E 's/msg="([^"]*)" +err="(.*)"$/\1 — \2/' | sort -u | cut -c1-230)
+    [ -z "$errs" ] && errs=$(eval "${LOG_CMD}" 2>/dev/null | grep -v accepted | tail -6 | cut -c1-200)
+    echo -e "  ${red}Lỗi:${plain}"
+    echo "$errs" | sed "s/^/    /"
+    echo ""
+    case "$errs" in
+        *"Invalid token"*|*401*|*403*|*"token"*|*"Token"*)
+            warn "Panel từ chối: ${bold}API Key sai${plain} — lấy đúng server_token trong Panel → Cài đặt → Node." ;;
+        *"no such host"*|*"dial tcp"*|*"connection refused"*|*"timeout"*)
+            warn "Không tới được Panel: kiểm link ${API_HOST} (DNS/https/tường lửa)." ;;
+        *404*|*"not found"*|*"Node not found"*)
+            warn "Panel không có node này: kiểm ${bold}NODE_ID${plain} và loại giao thức." ;;
+        *"address already in use"*)
+            warn "Cổng của node đang bị tiến trình khác giữ (xem cảnh báo bên dưới)." ;;
+        *"certificate"*|*"cert"*|*"private key"*)
+            warn "Chứng chỉ lỗi: ${cyan}hyx${plain} → 19 để cấp lại." ;;
+        *"unmarshal"*|*"json"*)
+            warn "Cấu hình node trên Panel có JSON hỏng (object rỗng trong protocol_settings?)." ;;
+    esac
+}
+
+hr
+if [ "$SVC_OK" = true ]; then
+    echo -e "  Trạng thái     ${green}● Đang chạy${plain} · $(${BIN} version 2>/dev/null | tail -1 | sed 's/ (.*//')"
+    if [ "$PANEL_OK" = true ]; then
+        echo -e "  Panel          ${API_HOST}  ${green}✓ đã tải cấu hình${plain}"
     else
-        echo -e "Kết nối Panel: ${yellow}Đang chờ... (gõ 'v2bx' rồi chọn 8 để xem log)${plain}"
+        echo -e "  Panel          ${API_HOST}  ${yellow}? chưa thấy xác nhận (xem log bên dưới)${plain}"
     fi
 else
-    echo -e "Trạng thái: ${red}Thất bại (Failed/Inactive)${plain}"
-    echo -e "Log lỗi gần nhất:"
-    eval "${LOG_CMD}" 2>/dev/null | tail -15
+    echo -e "  Trạng thái     ${red}● Không chạy${plain}"
 fi
-echo -e "${green}==========================================${plain}"
+_nodes=""
+for (( i=0; i<${#NODE_CONFIGS[@]}; i++ )); do
+    _id=$(echo "${NODE_CONFIGS[$i]}" | grep -oE '"NodeID": [0-9]+' | grep -oE '[0-9]+')
+    _ty=$(echo "${NODE_CONFIGS[$i]}" | grep -oE '"NodeType": "[^"]+"' | cut -d'"' -f4)
+    _nodes="${_nodes}#${_id} ${_ty}  "
+done
+echo -e "  Node           ${_nodes}"
+if [ "$USE_LE" = true ] && [ -s "${CONF_DIR}/cert.crt" ]; then
+    _exp=$(openssl x509 -in "${CONF_DIR}/cert.crt" -noout -enddate 2>/dev/null | cut -d= -f2)
+    echo -e "  Chứng chỉ      ${CERT_DOMAIN:-$SSL_DOMAIN} · hết hạn ${_exp:-?} ${dim}(tự gia hạn)${plain}"
+elif [ "$HAS_SSL" = true ]; then
+    echo -e "  Chứng chỉ      ${yellow}tự ký theo IP${plain}"
+else
+    echo -e "  Chứng chỉ      không"
+fi
+_ports=$( { ss -lntp 2>/dev/null | grep -i v2bx | awk '{print $4}'; ss -lnup 2>/dev/null | grep -i v2bx | awk '{print $5}'; } \
+          | sed 's/.*://' | awk '$1 ~ /^[0-9]+$/ && $1<32768' | sort -un | tr '\n' ' ')
+echo -e "  Cổng lắng nghe ${_ports:-${dim}chưa có (node chưa lên hoặc chưa kéo được cấu hình)${plain}}"
+if [ "${MSS_OK:-}" = true ]; then
+    echo -e "  MSS/MTU        ${green}✓ ép 1400${plain}"
+elif [ "${MSS_OK:-}" = false ]; then
+    echo -e "  MSS/MTU        ${yellow}✗ chưa ép${plain}"
+fi
+hr
+if [ "$SVC_OK" != true ] || [ "$PANEL_OK" != true ]; then
+    show_errors
+fi
 
 # Canh bao co tien trinh khac dang giu cong cua Node.
 #
@@ -924,36 +984,31 @@ for port in 80 443; do
     while read -r proc; do
         case "$proc" in
             ""|*V2bX*) continue ;;
-            *) RIVALS="${RIVALS}\n   cổng ${port}: ${proc}" ;;
+            *) RIVALS="${RIVALS}\n     cổng ${port}: ${proc}" ;;
         esac
     done <<< "$(ss -lntp 2>/dev/null | awk -v p=":${port}\$" '$4 ~ p {print $NF}' | sort -u)"
 done
 if [ -n "$RIVALS" ]; then
-    echo -e "\n${red}⚠ CẢNH BÁO: có tiến trình khác đang giữ cổng của Node:${plain}"
+    bad "Tiến trình khác đang giữ cổng của Node — khách sẽ bị chia ngẫu nhiên, node chỉ nhận một phần:"
     echo -e "${yellow}${RIVALS}${plain}"
-    echo -e "${yellow}Linux cho phép nhiều tiến trình cùng giữ một cổng, không báo lỗi, nhưng${plain}"
-    echo -e "${yellow}kết nối của khách sẽ bị chia ngẫu nhiên — Node chỉ nhận được một phần và${plain}"
-    echo -e "${yellow}phần còn lại rơi vào tiến trình sai rồi chết. Hãy dừng hẳn tiến trình đó:${plain}"
-    echo -e "${cyan}   systemctl stop XrayR && systemctl disable XrayR${plain}   ${yellow}(nếu là XrayR)${plain}"
-    echo -e "${cyan}   systemctl stop x-ui  && systemctl disable x-ui${plain}    ${yellow}(nếu là x-ui)${plain}"
+    echo -e "     Dừng hẳn nó: ${cyan}systemctl disable --now XrayR${plain} / ${cyan}x-ui${plain}"
 fi
 
 # Cảnh báo tường lửa đang bật — node sẽ không nhận được kết nối
 if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
-    echo -e "\n${yellow}⚠ firewalld đang bật. Nhớ mở cổng của Node:${plain}"
-    echo -e "   ${cyan}firewall-cmd --permanent --add-port=<cổng>/tcp --add-port=<cổng>/udp && firewall-cmd --reload${plain}"
-    echo -e "   (hoặc gõ 'v2bx' → chọn 12 để mở nhanh)"
+    warn "firewalld đang bật — mở cổng của Node: ${cyan}hyx${plain} → 12"
 elif command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -qi "^Status: active"; then
-    echo -e "\n${yellow}⚠ UFW đang bật. Nhớ mở cổng của Node — hoặc gõ 'v2bx' → chọn 12.${plain}"
+    warn "UFW đang bật — mở cổng của Node: ${cyan}hyx${plain} → 12"
 fi
 
 # ==========================================
-# 7. Cài lệnh quản lý 'v2bx'
+# 7. Cài lệnh quản lý 'hyx' (tên cũ 'v2bx' / 'hypex-x' vẫn chạy)
 # ==========================================
-echo -e "\n${yellow}Đang cài lệnh quản lý 'v2bx'...${plain}"
-if curl -fL --retry 3 --connect-timeout 15 -o /usr/local/bin/v2bx "${SCRIPT_URL}/v2bx.sh"; then
-    chmod +x /usr/local/bin/v2bx
-    echo -e "${green}✓ Đã cài xong! Gõ lệnh 'v2bx' bất cứ lúc nào để quản lý.${plain}"
+if curl -fsL --retry 3 --connect-timeout 15 -o /usr/local/bin/hyx "${SCRIPT_URL}/v2bx.sh"; then
+    chmod +x /usr/local/bin/hyx
+    ln -sf /usr/local/bin/hyx /usr/local/bin/v2bx
+    ln -sf /usr/local/bin/hyx /usr/local/bin/hypex-x
+    echo -e "\n  Quản lý: gõ ${bold}$(gtext hyx)${plain}   ${dim}(7 trạng thái · 8 log)${plain}\n"
 else
-    echo -e "${yellow}⚠ Không tải được script quản lý, bỏ qua (không ảnh hưởng Node).${plain}"
+    warn "Không tải được script quản lý (không ảnh hưởng Node). Chạy lại: curl -fsL ${SCRIPT_URL}/v2bx.sh -o /usr/local/bin/hyx"
 fi
