@@ -794,8 +794,9 @@ Type=simple
 User=root
 WorkingDirectory=${CONF_DIR}
 ExecStart=${BIN} server -c ${CONF_DIR}/config.json
-Restart=on-failure
-RestartSec=5s
+# always: V2bX cũ thoát mã 0 khi panel lỗi, on-failure sẽ không khởi động lại
+Restart=always
+RestartSec=10s
 LimitNOFILE=1000000
 LimitNPROC=1000000
 # Tương thích EulerOS / openEuler: không bật sandbox, kernel cũ có thể không hỗ trợ

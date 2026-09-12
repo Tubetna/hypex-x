@@ -246,6 +246,13 @@ dù cert/key đã chép xong. Bộ cài cũ coi là "cert hỏng" và dừng —
 kiểm bằng `cert_key_match` (hai file không rỗng + cùng public key). Và **đổi DNS sang máy mới chỉ sau
 khi V2bX máy mới đã chạy**.
 
+**Panel sập là node chết luôn, không tự dậy (v1.0.6, 12/09/2026).** Panel `43.133.42.80` (2 GB) bị OOM giết
+MariaDB → API trả 500 → V2bX "Khởi chạy các Node thất bại" rồi **thoát mã 0** (`return` trong `cmd/server.go`)
+→ systemd `Restart=on-failure` không khởi động lại → node 25/26 chết cho tới khi bật tay. Sửa: thoát `os.Exit(1)`
++ unit `Restart=always RestartSec=10s` (máy đang chạy: drop-in `/etc/systemd/system/V2bX.service.d/restart.conf`).
+Gốc bên panel: Horizon master bị giết để lại worker mồ côi, php-fpm trần 30 con × 55 MB, đã siết xuống
+(fpm 12, Horizon 3/2/2, swap 2 GB) — 2 GB RAM vẫn là quá ít cho 36k user + 25 node.
+
 ## 5. Vị trí file — đặt sai là hỏng ngầm
 
 Geo data phải nằm cùng `config.json`, **không phải cùng binary**:

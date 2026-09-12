@@ -66,20 +66,23 @@ func serverHandle(_ *cobra.Command, _ []string) {
 	vc, err := vCore.NewCore(c.CoresConfig)
 	if err != nil {
 		log.WithField("err", err).Error("Khởi tạo Core thất bại")
-		return
+		os.Exit(1)
 	}
 	err = vc.Start()
 	if err != nil {
 		log.WithField("err", err).Error("Khởi động Core thất bại")
-		return
+		os.Exit(1)
 	}
 	defer vc.Close()
 	log.Info("Core ", vc.Type(), " đã khởi động thành công")
 	nodes := node.New()
 	err = nodes.Start(c.NodeConfig, vc)
 	if err != nil {
+		// Panel sập (MySQL chết, 500...) thì tới đây. Thoát mã 0 là systemd
+		// Restart=on-failure KHÔNG khởi động lại -> node chết cho tới khi có người
+		// vào bật tay (25/26 ngày 12/09/2026). Phải thoát mã lỗi để được restart.
 		log.WithField("err", err).Error("Khởi chạy các Node thất bại")
-		return
+		os.Exit(1)
 	}
 	log.Info("Các Node đã khởi động xong")
 	xdns := os.Getenv("XRAY_DNS_PATH")
