@@ -1,12 +1,15 @@
 name: Publish Docker image
 
+# Chỉ chạy khi bấm tay (Actions → Publish Docker image → Run workflow).
+# Trước đây tự chạy mỗi lần phát hành release: build arm64 qua QEMU mất 33 phút rồi
+# push lên ghcr.io bị 403 vì thiếu permissions packages:write → mỗi release một mail
+# báo lỗi, trong khi node cài bằng script/binary, không ai dùng image này.
 on:
   workflow_dispatch:
-  release:
-    types: [published]
-  pull_request:
-    branches:
-      - 'dev_new'
+
+permissions:
+  contents: read
+  packages: write
 
 env:
   REGISTRY: ghcr.io
@@ -15,6 +18,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -73,6 +77,7 @@ jobs:
 
   merge:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs:
       - build
     steps:
