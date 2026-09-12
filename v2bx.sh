@@ -159,6 +159,13 @@ get_version() {
 }
 
 # ── Đọc nhanh cấu hình / cert / MSS cho header và trạng thái ──
+get_autostart() {
+    case "${INIT_SYSTEM}" in
+        systemd) systemctl is-enabled $SERVICE &>/dev/null ;;
+        openrc)  rc-update show default 2>/dev/null | grep -q "$SERVICE" ;;
+        *) false ;;
+    esac && echo -e "${green}tự chạy ✓${plain}" || echo -e "${yellow}tự chạy ✗${plain} ${dim}(9)${plain}"
+}
 get_nodes() {
     # "#25 VLESS  #26 VLESS" — đọc thẳng config.json, không cần jq
     [ -f "$CONFIG" ] || { echo "chưa có config"; return; }
@@ -205,7 +212,7 @@ show_header() {
     fi
     HYX_FIRST=0
     echo -e "  $(g 0)────────────────────────────────────────────────────${plain}"
-    echo -e "  $(get_status)  ${dim}$(get_version | sed 's/ (.*//') · ${ARCH_SUFFIX:-?}${plain}"
+    echo -e "  $(get_status)  ${dim}$(get_version | sed 's/ (.*//') · ${ARCH_SUFFIX:-?}${plain} · $(get_autostart)"
     echo -e "  ${dim}Node${plain}  ${yellow}$(get_nodes)${plain}"
     echo -e "  ${dim}Cert${plain}  $(get_cert_info)"
     echo -e "  ${dim}MSS ${plain}  $(get_mss_status)"
@@ -313,6 +320,7 @@ update_v2bx() {
     done
 
     svc start
+    svc enable &>/dev/null   # mặc định luôn tự chạy cùng hệ thống
     spin "Khởi động lại V2bX..." sleep 3
     if svc_active; then
         rm -f "${BINARY}.bak"
