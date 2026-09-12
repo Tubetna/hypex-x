@@ -744,7 +744,14 @@ cat > "${CONF_DIR}/config.json" << EOF
       "Log": {
         "Level": "warning"
       },
-      "AssetPath": "${CONF_DIR}/"
+      "AssetPath": "${CONF_DIR}/",
+      "XrayConnectionConfig": {
+        "handshake": 4,
+        "connIdle": 30,
+        "uplinkOnly": 2,
+        "downlinkOnly": 4,
+        "bufferSize": 16
+      }
     },
     {
       "Type": "sing",
@@ -820,6 +827,40 @@ EOF
     else
         MSS_OK=false; warn "Không ép được MSS (thiếu module TCPMSS?) — app trên AWS VN có thể treo"
     fi
+fi
+
+# ==========================================
+# 4c. Máy ít RAM: swap + trần bộ nhớ cho Go
+# ==========================================
+# 12/09/2026: máy 1 GB không swap, ~1.500 kết nối đồng thời -> V2bX phình 700-800 MB
+# (bufferSize 64 KB x 2 chiều x số kết nối, cộng GC giữ gấp đôi) -> OOM killer giết
+# 10 lần/ngày, mỗi lần mọi khách trên máy đứt 10 s -> "FB lúc load ảnh lúc không".
+# Ba lớp: bufferSize 16 KB (config.json ở trên), GOMEMLIMIT để Go dọn rác gắt trước
+# khi chạm trần, và swap để không bị giết thẳng tay.
+MEM_TOTAL_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+GOMEMLIMIT_MB=$(( MEM_TOTAL_MB * 55 / 100 ))
+[ "${GOMEMLIMIT_MB}" -lt 256 ] && GOMEMLIMIT_MB=256
+if [ "${INIT_SYSTEM}" = "systemd" ]; then
+    mkdir -p /etc/systemd/system/V2bX.service.d
+    cat > /etc/systemd/system/V2bX.service.d/memory.conf << EOF
+[Service]
+# Go don rac gat gao khi heap cham ${GOMEMLIMIT_MB} MiB (55% RAM) thay vi de OOM killer giet
+Environment=GOMEMLIMIT=${GOMEMLIMIT_MB}MiB
+Environment=GOGC=50
+EOF
+fi
+if [ "${MEM_TOTAL_MB}" -gt 0 ] && [ "${MEM_TOTAL_MB}" -lt 2048 ] && [ "$(awk '/SwapTotal/{print $2}' /proc/meminfo)" = "0" ]; then
+    if fallocate -l 1G /swapfile 2>/dev/null && chmod 600 /swapfile && mkswap /swapfile &>/dev/null && swapon /swapfile 2>/dev/null; then
+        grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        echo 'vm.swappiness=10' > /etc/sysctl.d/91-v2bx-swappiness.conf
+        sysctl -q -w vm.swappiness=10 2>/dev/null
+        ok "Máy ${MEM_TOTAL_MB} MB không swap → đã tạo swap 1 GB, GOMEMLIMIT=${GOMEMLIMIT_MB}MiB"
+    else
+        rm -f /swapfile
+        warn "Không tạo được swap (fallocate không hỗ trợ?) — chỉ đặt GOMEMLIMIT=${GOMEMLIMIT_MB}MiB"
+    fi
+else
+    ok "GOMEMLIMIT=${GOMEMLIMIT_MB}MiB (RAM ${MEM_TOTAL_MB} MB)"
 fi
 
 # ==========================================

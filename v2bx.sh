@@ -193,6 +193,18 @@ get_mss_status() {
     fi
 }
 
+get_mem_status() {
+    local tot lim sw
+    tot=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null)
+    sw=$(awk '/SwapTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null)
+    lim=$(grep -oE 'GOMEMLIMIT=[0-9]+MiB' /etc/systemd/system/V2bX.service.d/memory.conf 2>/dev/null | cut -d= -f2)
+    if [ -n "$lim" ]; then
+        echo -e "${green}✓ trần ${lim}${plain} ${dim}· RAM ${tot} MB · swap ${sw} MB${plain}"
+    else
+        echo -e "${yellow}✗ chưa đặt trần${plain} ${dim}· RAM ${tot} MB · swap ${sw} MB (menu 21)${plain}"
+    fi
+}
+
 # ── Header ───────────────────────────────
 HYX_FIRST=1
 show_header() {
@@ -216,6 +228,7 @@ show_header() {
     echo -e "  ${dim}Node${plain}  ${yellow}$(get_nodes)${plain}"
     echo -e "  ${dim}Cert${plain}  $(get_cert_info)"
     echo -e "  ${dim}MSS ${plain}  $(get_mss_status)"
+    echo -e "  ${dim}RAM ${plain}  $(get_mem_status)"
     echo -e "  $(g 9)────────────────────────────────────────────────────${plain}"
 }
 
@@ -238,7 +251,8 @@ show_menu() {
     echo -e "  $(m 4 12 'Mở cổng')$(m 5 13 'Chặn speedtest')$(m 6 20 'Ép MSS 1400')"
     echo ""
     echo -e "  $(m 7 19 'Cert LE')$(m 8 16 'Cert tự ký')$(m 9 15 'Khóa X25519')"
-    echo -e "  $(m 0 17 'Geo')$(m 1 18 'Giới hạn TB')$(m 2 0 'Thoát')"
+    echo -e "  $(m 0 17 'Geo')$(m 1 18 'Giới hạn TB')$(m 2 21 'Chống OOM')"
+    echo -e "  $(m 3 0 'Thoát')"
     echo ""
     read -p "  ❯ " choice
     handle_choice "$choice"
@@ -266,6 +280,7 @@ handle_choice() {
     18) check_device_limit ;;
     19) gen_le_ssl ;;
     20) setup_mss_clamp ;;
+    21) setup_mem_guard ;;
     0)  echo -e "${green}Tạm biệt!${plain}"; exit 0 ;;
     *)  echo -e "  ${red}Không có mục này.${plain}"; sleep 0.7; show_menu ;;
     esac
@@ -382,6 +397,7 @@ status_v2bx() {
     echo -e "  Panel        $(grep -oE '"ApiHost"[^,]*' "$CONFIG" 2>/dev/null | head -1 | cut -d'"' -f4)"
     echo -e "  Chứng chỉ    $(get_cert_info)"
     echo -e "  MSS/MTU      $(get_mss_status)"
+    echo -e "  RAM/OOM      $(get_mem_status)"
     local ports
     ports=$( { ss -lntp 2>/dev/null | grep -i v2bx | awk '{print $4}'; ss -lnup 2>/dev/null | grep -i v2bx | awk '{print $5}'; } \
              | sed 's/.*://' | awk '$1 ~ /^[0-9]+$/ && $1<32768' | sort -un | tr '\n' ' ')
@@ -556,6 +572,71 @@ block_speedtest() {
 # 1500 byte mà không trả ICMP frag-needed -> app đặt trên AWS (Xanh SM...) treo ở logo,
 # Google/Facebook vẫn chạy nên rất khó nhận ra. PMTU đo được 1482. Phải ép ở CẢ INPUT:
 # rule OUTPUT chỉ ép cỡ gói server gửi về, cỡ gói node gửi đi theo SYN-ACK của server.
+# 12/09/2026: máy 1 GB không swap, ~1.500 kết nối -> V2bX 700-800 MB -> OOM killer giết
+# 10 lần/ngày, mỗi lần mọi khách trên máy đứt 10 s ("FB lúc load ảnh lúc không").
+# Ba lớp: bufferSize 16 KB/kết nối, GOMEMLIMIT (Go dọn rác gắt trước trần), swap 1 GB.
+setup_mem_guard() {
+    echo -e "${yellow}Đang đặt trần bộ nhớ + swap chống OOM cho V2bX...${plain}"
+    local tot lim killed
+    tot=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+    lim=$(( tot * 55 / 100 )); [ "$lim" -lt 256 ] && lim=256
+    killed=$(journalctl -k --since -2days --grep 'Killed process .*V2bX' 2>/dev/null | grep -c Killed)
+    echo -e "  RAM ${tot} MB · OOM giết V2bX ${killed} lần trong 2 ngày qua"
+    if [ "$INIT_SYSTEM" = "systemd" ] 2>/dev/null || command -v systemctl &>/dev/null; then
+        mkdir -p /etc/systemd/system/V2bX.service.d
+        cat > /etc/systemd/system/V2bX.service.d/memory.conf << EOF
+[Service]
+# Go don rac gat gao khi heap cham ${lim} MiB (55% RAM) thay vi de OOM killer giet
+Environment=GOMEMLIMIT=${lim}MiB
+Environment=GOGC=50
+EOF
+        systemctl daemon-reload
+        echo -e "  ${green}✓${plain} GOMEMLIMIT=${lim}MiB"
+    fi
+    if [ "$tot" -lt 2048 ] && [ "$(awk '/SwapTotal/{print $2}' /proc/meminfo)" = "0" ]; then
+        if fallocate -l 1G /swapfile 2>/dev/null && chmod 600 /swapfile && mkswap /swapfile &>/dev/null && swapon /swapfile 2>/dev/null; then
+            grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            echo 'vm.swappiness=10' > /etc/sysctl.d/91-v2bx-swappiness.conf; sysctl -q -w vm.swappiness=10
+            echo -e "  ${green}✓${plain} swap 1 GB"
+        else
+            rm -f /swapfile; echo -e "  ${yellow}!${plain} không tạo được swap"
+        fi
+    fi
+    if [ -f "$CONFIG" ]; then
+        cp -f "$CONFIG" "${CONFIG}.bak.mem.$(date +%Y%m%d%H%M%S)"
+        if command -v python3 &>/dev/null; then
+            python3 - "$CONFIG" << 'EOF'
+import json, sys
+p = sys.argv[1]; c = json.load(open(p))
+for core in c.get("Cores", []):
+    if core.get("Type") == "xray":
+        core["XrayConnectionConfig"] = {"handshake": 4, "connIdle": 30, "uplinkOnly": 2, "downlinkOnly": 4, "bufferSize": 16}
+json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)
+EOF
+        elif grep -q '"XrayConnectionConfig"' "$CONFIG"; then
+            sed -i -E 's/("bufferSize"[[:space:]]*:[[:space:]]*)[0-9]+/\116/' "$CONFIG"
+        else
+            # Không có python3: chèn ngay sau dòng "Type": "xray" (bộ cài luôn viết dòng này riêng)
+            sed -i -E '0,/"Type"[[:space:]]*:[[:space:]]*"xray"[[:space:]]*,/s//&\n      "XrayConnectionConfig": {"handshake": 4, "connIdle": 30, "uplinkOnly": 2, "downlinkOnly": 4, "bufferSize": 16},/' "$CONFIG"
+        fi
+        if grep -q '"bufferSize"[[:space:]]*:[[:space:]]*16' "$CONFIG"; then
+            echo -e "  ${green}✓${plain} bufferSize 16 KB/kết nối (config.json)"
+        else
+            echo -e "  ${yellow}!${plain} không sửa được bufferSize trong config.json — thêm tay khối XrayConnectionConfig"
+        fi
+    fi
+    echo -e "${yellow}Khởi động lại V2bX để áp dụng (khách rớt ~2 giây)...${plain}"
+    systemctl restart V2bX 2>/dev/null || service V2bX restart 2>/dev/null
+    sleep 3
+    if systemctl is-active --quiet V2bX 2>/dev/null; then
+        local pid; pid=$(systemctl show V2bX -p MainPID --value)
+        echo -e "${green}V2bX đang chạy, RSS $(( $(ps -o rss= -p "$pid") / 1024 )) MB. Trần ${lim} MiB, kiểm lại sau vài giờ bằng menu 7.${plain}"
+    else
+        echo -e "${red}V2bX không lên — xem log (menu 8).${plain}"
+    fi
+    press_any_key
+}
+
 setup_mss_clamp() {
     echo -e "${yellow}Đang ép MSS 1400 + bật dò MTU (tcp_mtu_probing)...${plain}"
     if ! command -v iptables &>/dev/null; then
