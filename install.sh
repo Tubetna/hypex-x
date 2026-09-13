@@ -864,6 +864,25 @@ else
 fi
 
 # ==========================================
+# 4d. Tối ưu mạng (BBR+fq, buffer, TFO, DNS cache, journald) — tune-net.sh
+# ==========================================
+# Chạy SAU khi config.json đã ghi và TRƯỚC khi cài dịch vụ; script tự restart V2bX
+# nếu đã có, lần cài mới thì restart ở bước 5 sẽ nạp. Xem tune-net.sh để biết từng mục.
+if [ "${INIT_SYSTEM}" = "systemd" ] && command -v python3 &>/dev/null; then
+    TUNE_URL="https://raw.githubusercontent.com/Tubetna/hypex-x/main/tune-net.sh"
+    if curl -fsSL -o /usr/local/sbin/hyx-tune-net.sh "${TUNE_URL}" 2>/dev/null; then
+        chmod 755 /usr/local/sbin/hyx-tune-net.sh
+        if bash /usr/local/sbin/hyx-tune-net.sh >/tmp/hyx-tune.log 2>&1; then
+            ok "Tối ưu mạng: BBR+fq · buffer TCP · TFO/NoDelay · DNS cache · journald 300M"
+        else
+            warn "Tối ưu mạng lỗi (xem /tmp/hyx-tune.log) — node vẫn chạy, chạy lại bằng hyx → 22"
+        fi
+    else
+        warn "Không tải được tune-net.sh — chạy sau bằng hyx → 22"
+    fi
+fi
+
+# ==========================================
 # 5. Cài dịch vụ
 # ==========================================
 

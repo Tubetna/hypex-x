@@ -252,7 +252,7 @@ show_menu() {
     echo ""
     echo -e "  $(m 7 19 'Cert LE')$(m 8 16 'Cert tự ký')$(m 9 15 'Khóa X25519')"
     echo -e "  $(m 0 17 'Geo')$(m 1 18 'Giới hạn TB')$(m 2 21 'Chống OOM')"
-    echo -e "  $(m 3 0 'Thoát')"
+    echo -e "  $(m 3 22 'Tối ưu mạng')$(m 4 0 'Thoát')"
     echo ""
     read -p "  ❯ " choice
     handle_choice "$choice"
@@ -281,6 +281,7 @@ handle_choice() {
     19) gen_le_ssl ;;
     20) setup_mss_clamp ;;
     21) setup_mem_guard ;;
+    22) tune_net ;;
     0)  echo -e "${green}Tạm biệt!${plain}"; exit 0 ;;
     *)  echo -e "  ${red}Không có mục này.${plain}"; sleep 0.7; show_menu ;;
     esac
@@ -575,6 +576,23 @@ block_speedtest() {
 # 12/09/2026: máy 1 GB không swap, ~1.500 kết nối -> V2bX 700-800 MB -> OOM killer giết
 # 10 lần/ngày, mỗi lần mọi khách trên máy đứt 10 s ("FB lúc load ảnh lúc không").
 # Ba lớp: bufferSize 16 KB/kết nối, GOMEMLIMIT (Go dọn rác gắt trước trần), swap 1 GB.
+# 13/09/2026: BBR+fq, buffer TCP 32 MB, TFO/NoDelay, DNS cache Xray, bufferSize 32,
+# journald 300M, V2bX Nice -10. Script riêng tune-net.sh trong repo, tải về rồi chạy.
+tune_net() {
+    echo -e "${yellow}Đang tải và chạy bộ tối ưu mạng (tune-net.sh)...${plain}"
+    if ! curl -fsSL -o /usr/local/sbin/hyx-tune-net.sh "https://raw.githubusercontent.com/Tubetna/hypex-x/main/tune-net.sh"; then
+        echo -e "${red}Không tải được tune-net.sh.${plain}"; press_any_key; return
+    fi
+    chmod 755 /usr/local/sbin/hyx-tune-net.sh
+    echo -e "${yellow}V2bX sẽ khởi động lại (khách rớt ~2 giây).${plain}"
+    if bash /usr/local/sbin/hyx-tune-net.sh; then
+        echo -e "${green}Xong. Kiểm: sysctl net.ipv4.tcp_congestion_control (bbr), tc qdisc show (fq).${plain}"
+    else
+        echo -e "${red}Script báo lỗi — xem dòng trên.${plain}"
+    fi
+    press_any_key
+}
+
 setup_mem_guard() {
     echo -e "${yellow}Đang đặt trần bộ nhớ + swap chống OOM cho V2bX...${plain}"
     local tot lim killed
