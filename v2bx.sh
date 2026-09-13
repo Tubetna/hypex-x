@@ -584,6 +584,7 @@ tune_net() {
         echo -e "${red}Không tải được tune-net.sh.${plain}"; press_any_key; return
     fi
     chmod 755 /usr/local/sbin/hyx-tune-net.sh
+    echo -e "${yellow}⚠ Node GAME thì đừng áp: khách Liên Quân từng báo khựng hơn (13/09). Node duyệt web/tải thì có lợi.${plain}"
     echo -e "${yellow}V2bX sẽ khởi động lại (khách rớt ~2 giây).${plain}"
     if bash /usr/local/sbin/hyx-tune-net.sh; then
         echo -e "${green}Xong. Kiểm: sysctl net.ipv4.tcp_congestion_control (bbr), tc qdisc show (fq).${plain}"
@@ -606,7 +607,7 @@ setup_mem_guard() {
 [Service]
 # Go don rac gat gao khi heap cham ${lim} MiB (55% RAM) thay vi de OOM killer giet
 Environment=GOMEMLIMIT=${lim}MiB
-Environment=GOGC=50
+Environment=GOGC=100
 EOF
         systemctl daemon-reload
         echo -e "  ${green}✓${plain} GOMEMLIMIT=${lim}MiB"

@@ -2,7 +2,9 @@
 # tune-net.sh — bộ tối ưu mạng cho node V2bX: BBR+fq, buffer TCP, TFO/NoDelay, DNS cache Xray,
 # bufferSize 32, journald 300M, V2bX Nice -10. Idempotent, chạy lại bao nhiêu lần cũng được.
 # Đo 13/09/2026 (node 33, vantage Hà Nội): ping 761 → 447 ms, tải 24–35 → 41–43 MB/s.
-# Dùng: bash tune-net.sh   (bộ cài gọi ở bước 4d, hyx menu 22)
+# Dùng: bash tune-net.sh   (hyx menu 22; bộ cài chỉ gọi khi HXtune=1)
+# ⚠ 13/09/2026: khách chơi Liên Quân trên node 25/26 báo "khựng hơn" sau khi áp, gỡ thì ổn (đo 100 gói UDP
+#   không thấy khác, nhưng khách là thước đo). Node GAME: đừng áp. Node duyệt web/tải: có lợi (ping 761→447 ms).
 # Bo tuning mang cho node V2bX (idempotent) — 13/09/2026
 set -e
 [ "$(id -u)" = 0 ] || { echo "Cần root"; exit 1; }

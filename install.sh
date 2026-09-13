@@ -846,7 +846,7 @@ if [ "${INIT_SYSTEM}" = "systemd" ]; then
 [Service]
 # Go don rac gat gao khi heap cham ${GOMEMLIMIT_MB} MiB (55% RAM) thay vi de OOM killer giet
 Environment=GOMEMLIMIT=${GOMEMLIMIT_MB}MiB
-Environment=GOGC=50
+Environment=GOGC=100
 EOF
 fi
 if [ "${MEM_TOTAL_MB}" -gt 0 ] && [ "${MEM_TOTAL_MB}" -lt 2048 ] && [ "$(awk '/SwapTotal/{print $2}' /proc/meminfo)" = "0" ]; then
@@ -868,7 +868,9 @@ fi
 # ==========================================
 # Chạy SAU khi config.json đã ghi và TRƯỚC khi cài dịch vụ; script tự restart V2bX
 # nếu đã có, lần cài mới thì restart ở bước 5 sẽ nạp. Xem tune-net.sh để biết từng mục.
-if [ "${INIT_SYSTEM}" = "systemd" ] && command -v python3 &>/dev/null; then
+# 13/09/2026: khách game báo "khựng hơn" sau tuning trên node 25/26, gỡ thì ổn → KHÔNG tự chạy.
+# Chỉ chạy khi chủ động: HXtune=1 khi cài, hoặc hyx → 22 sau này.
+if [ "${HXtune:-0}" = "1" ] && [ "${INIT_SYSTEM}" = "systemd" ] && command -v python3 &>/dev/null; then
     TUNE_URL="https://raw.githubusercontent.com/Tubetna/hypex-x/main/tune-net.sh"
     if curl -fsSL -o /usr/local/sbin/hyx-tune-net.sh "${TUNE_URL}" 2>/dev/null; then
         chmod 755 /usr/local/sbin/hyx-tune-net.sh
@@ -880,6 +882,8 @@ if [ "${INIT_SYSTEM}" = "systemd" ] && command -v python3 &>/dev/null; then
     else
         warn "Không tải được tune-net.sh — chạy sau bằng hyx → 22"
     fi
+else
+    ok "Tối ưu mạng: bỏ qua (mặc định; bật bằng HXtune=1 hoặc hyx → 22 — node game nên để nguyên)"
 fi
 
 # ==========================================
