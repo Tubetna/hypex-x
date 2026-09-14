@@ -247,6 +247,16 @@ func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResu
 	if domain == "" {
 		return false
 	}
+	// Client đã gửi tên miền thì giữ nguyên, chỉ đè đích khi client gửi IP.
+	// App Facebook/Instagram nối tới scontent.fhan12-1.fna.fbcdn.net (cache VN)
+	// nhưng gửi SNI scontent.xx.fbcdn.net; nếu đè theo SNI thì 1.1.1.1 phân giải
+	// *.xx.fbcdn.net về edge Hong Kong, cert *.fbcdn.net không khớp tên fna → app
+	// huỷ TLS rồi thử lại liên tục, ảnh/video không tải (14/09/2026). Đè đích khi
+	// client gửi IP vẫn cần cho IPv6 literal trên node không có IPv6 (11/09/2026).
+	if destination.Address.Family().IsDomain() && !strings.EqualFold(domain, destination.Address.Domain()) {
+		errors.LogInfo(ctx, "keep client domain ", destination.Address.Domain(), " instead of sniffed ", domain)
+		return false
+	}
 	for _, d := range request.ExcludeForDomain {
 		if strings.HasPrefix(d, "regexp:") {
 			pattern := d[7:]

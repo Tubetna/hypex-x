@@ -265,6 +265,27 @@ MariaDB → API trả 500 → V2bX "Khởi chạy các Node thất bại" rồi 
 Gốc bên panel: Horizon master bị giết để lại worker mồ côi, php-fpm trần 30 con × 55 MB, đã siết xuống
 (fpm 12, Horizon 3/2/2, swap 2 GB) — 2 GB RAM vẫn là quá ít cho 36k user + 25 node.
 
+**Sniff SNI đè tên miền khách đã gửi → Facebook "lúc load ảnh lúc không" (v1.0.8, 14/09/2026).**
+App Facebook/Instagram nối tới `scontent.fhan12-1.fna.fbcdn.net` (cache FB tại VN) nhưng gửi **SNI
+`scontent.xx.fbcdn.net`** (kiểu gộp kết nối của FB; `video.fhan12-1` → `video.xx` cũng vậy). Xray sniff
+`tls` rồi **đè đích bằng SNI** → phân giải `*.xx.fbcdn.net` qua 1.1.1.1 → **edge Hong Kong `57.144.98.x`**
+(TTL 3 s) → edge trả cert `*.fbcdn.net`, **không khớp** `scontent.fhan12-1.fna.fbcdn.net` (wildcard chỉ khớp
+một nhãn) → app huỷ TLS ngay khi nhận cert rồi thử lại 4–5 lần/giây: log node ra **100–300 dòng
+`accepted tcp:scontent…` mỗi phút từ một user** ("bão"), mỗi kết nối chỉ ~4 KB downlink, khách thấy
+ảnh/video xoay. Kết nối mà app gửi SNI = fhan12-1 thì khoẻ, nên chỉ ~15% khách dính (tuỳ bản app). Máy node
+cũ dùng resolver ISP nên `*.xx` ra cache VN, đè đích vô hại — sang máy mới dùng 1.1.1.1 (11/09) mới lộ.
+Nhìn ra bằng log Xray mức **info** (ghi ra file qua `ErrorPath`, journald sẽ rate-limit): mỗi phiên
+`received request for tcp:scontent.fhan12-1…` + `sniffed domain: scontent.xx…` + `dialing to 57.144.98.128`
++ `connection ends > … websocket: close 1000 (normal)` sau **0,16 s**. Sửa: `shouldOverride` trong
+`core/xray/app/dispatcher/default.go` — **client đã gửi tên miền thì không đè**, chỉ đè khi client gửi IP
+(vẫn giữ được fix IPv6 literal 11/09). Sau vá: scontent từ 30–300 xuống 4–16 kết nối/phút, hết bão.
+Bài học đo: `accepted` nhiều ≠ node khoẻ; `curl` từ node tới FB luôn 200 vì curl gửi SNI đúng tên.
+Đừng `--resolve` ép SNI fna vào IP edge rồi kết luận "TLS treo" — đó là curl từ chối cert (exit 60).
+
+**Không có `DnsConfigPath` là Xray hỏi DNS cho từng kết nối (14/09/2026).** Máy `.17` thiếu khoá này (`.20`
+có) → resolver `localhost`, không cache → **40 truy vấn/s** tới 1.1.1.1 (A + AAAA), `.20` chỉ 2/s. Bộ cài
+phải luôn đặt `"DnsConfigPath": "/etc/V2bX/dns.json"`; kiểm nhanh: `tcpdump -ni ens3 udp port 53 | wc -l`.
+
 ## 5. Vị trí file — đặt sai là hỏng ngầm
 
 Geo data phải nằm cùng `config.json`, **không phải cùng binary**:

@@ -745,6 +745,7 @@ cat > "${CONF_DIR}/config.json" << EOF
         "Level": "warning"
       },
       "AssetPath": "${CONF_DIR}/",
+      "DnsConfigPath": "${CONF_DIR}/dns.json",
       "XrayConnectionConfig": {
         "handshake": 4,
         "connIdle": 30,
