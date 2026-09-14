@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
@@ -62,6 +64,7 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		log.SetOutput(f)
 	}
 	limiter.Init()
+	startPprof()
 	log.Info("Đang khởi động V2bX...")
 	vc, err := vCore.NewCore(c.CoresConfig)
 	if err != nil {
@@ -127,4 +130,20 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		signal.Notify(osSignals, syscall.SIGINT, syscall.SIGTERM)
 		<-osSignals
 	}
+}
+
+// startPprof mở endpoint pprof khi đặt V2BX_PPROF=127.0.0.1:6060 (drop-in systemd).
+// Dùng để bắt rò rỉ heap (13/09/2026: RSS tăng ~4 MB/phút dù kết nối giảm).
+// Không đặt biến thì không mở gì, không tốn tài nguyên. Chỉ nên nghe loopback.
+func startPprof() {
+	addr := os.Getenv("V2BX_PPROF")
+	if addr == "" {
+		return
+	}
+	go func() {
+		log.Info("pprof đang nghe tại ", addr, " (/debug/pprof/)")
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			log.WithField("err", err).Warn("Không mở được pprof")
+		}
+	}()
 }

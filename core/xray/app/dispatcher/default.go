@@ -426,6 +426,13 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			Counter: &ts.UpCounter,
 		}
 		lm.AddLink(managedWriter, outbound.Reader)
+		// Rò rỉ heap (13–14/09/2026): với UDP bị đổi đích (sniff quic, UseIPv4)
+		// outbound handler bọc link.Writer thêm một lớp EndpointOverrideWriter
+		// KHÔNG có Close() -> common.Close/Interrupt thành no-op -> ManagedWriter.Close
+		// không bao giờ chạy -> entry trong lm.links giữ mãi cả kết nối WebSocket
+		// (~60 KB/phiên, ~5.000 phiên sau 20 phút). DispatchLink chạy đồng bộ tới
+		// khi kết nối kết thúc, nên gỡ entry ở đây, không trông vào Close lan xuống.
+		defer lm.RemoveWriter(managedWriter)
 		outbound.Writer = &dispatcher.SizeStatWriter{
 			Counter: downcounter,
 			Writer:  outbound.Writer,
