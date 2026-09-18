@@ -205,6 +205,16 @@ get_mem_status() {
     fi
 }
 
+get_reaper_status() {
+    if systemctl is-enabled v2bx-conn-reaper.timer &>/dev/null; then
+        local last
+        last=$(journalctl -t v2bx-reaper -n 1 -o cat --no-pager 2>/dev/null)
+        echo -e "${green}✓ timer 5 phút${plain} ${dim}· ${last:-chưa ngắt gì}${plain}"
+    else
+        echo -e "${yellow}✗ chưa bật${plain} ${dim}(menu 23 — node Reality trực tiếp nên bật)${plain}"
+    fi
+}
+
 # ── Header ───────────────────────────────
 HYX_FIRST=1
 show_header() {
@@ -229,6 +239,7 @@ show_header() {
     echo -e "  ${dim}Cert${plain}  $(get_cert_info)"
     echo -e "  ${dim}MSS ${plain}  $(get_mss_status)"
     echo -e "  ${dim}RAM ${plain}  $(get_mem_status)"
+    echo -e "  ${dim}Dọn ${plain}  $(get_reaper_status)"
     echo -e "  $(g 9)────────────────────────────────────────────────────${plain}"
 }
 
@@ -252,7 +263,7 @@ show_menu() {
     echo ""
     echo -e "  $(m 7 19 'Cert LE')$(m 8 16 'Cert tự ký')$(m 9 15 'Khóa X25519')"
     echo -e "  $(m 0 17 'Geo')$(m 1 18 'Giới hạn TB')$(m 2 21 'Chống OOM')"
-    echo -e "  $(m 3 22 'Tối ưu mạng')$(m 4 0 'Thoát')"
+    echo -e "  $(m 3 22 'Tối ưu mạng')$(m 4 23 'Dọn KN chết')$(m 5 0 'Thoát')"
     echo ""
     read -p "  ❯ " choice
     handle_choice "$choice"
@@ -282,6 +293,7 @@ handle_choice() {
     20) setup_mss_clamp ;;
     21) setup_mem_guard ;;
     22) tune_net ;;
+    23) setup_conn_reaper ;;
     0)  echo -e "${green}Tạm biệt!${plain}"; exit 0 ;;
     *)  echo -e "  ${red}Không có mục này.${plain}"; sleep 0.7; show_menu ;;
     esac
@@ -399,6 +411,7 @@ status_v2bx() {
     echo -e "  Chứng chỉ    $(get_cert_info)"
     echo -e "  MSS/MTU      $(get_mss_status)"
     echo -e "  RAM/OOM      $(get_mem_status)"
+    echo -e "  Dọn KN chết  $(get_reaper_status)"
     local ports
     ports=$( { ss -lntp 2>/dev/null | grep -i v2bx | awk '{print $4}'; ss -lnup 2>/dev/null | grep -i v2bx | awk '{print $5}'; } \
              | sed 's/.*://' | awk '$1 ~ /^[0-9]+$/ && $1<32768' | sort -un | tr '\n' ' ')
@@ -591,6 +604,57 @@ tune_net() {
     else
         echo -e "${red}Script báo lỗi — xem dòng trên.${plain}"
     fi
+    press_any_key
+}
+
+# 17/09/2026: node Reality trực tiếp (CHINA 1/2) giữ 7.000 ESTABLISHED với ~22 khách — phiên
+# UDP 443 (QUIC) qua VLESS bị route block, Xray không đóng kết nối vào, app khách giữ socket
+# mãi -> RAM vượt GOMEMLIMIT -> GC ăn 100% CPU. `ss -K` ngắt kết nối im > 15 phút, Xray nhận
+# lỗi đọc và tự dọn, không cần restart. CN1: 7.089 -> 915 kết nối, CPU 100% -> 6%.
+setup_conn_reaper() {
+    echo -e "${yellow}Đang cài bộ dọn kết nối chết (conn-reaper, timer 5 phút)...${plain}"
+    if ! command -v systemctl &>/dev/null || ! command -v ss &>/dev/null; then
+        echo -e "${red}Cần systemd và iproute2 (ss).${plain}"; press_any_key; return
+    fi
+    if ! curl -fsSL -o /usr/local/sbin/v2bx-conn-reaper.sh "${SCRIPT_URL}/conn-reaper.sh"; then
+        echo -e "${red}Không tải được conn-reaper.sh.${plain}"; press_any_key; return
+    fi
+    chmod 755 /usr/local/sbin/v2bx-conn-reaper.sh
+    cat > /etc/systemd/system/v2bx-conn-reaper.service << 'EOF'
+[Unit]
+Description=V2bX: ngat ket noi TCP vao cong node da im qua 15 phut
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/local/sbin/v2bx-conn-reaper.sh
+EOF
+    cat > /etc/systemd/system/v2bx-conn-reaper.timer << 'EOF'
+[Unit]
+Description=V2bX: don ket noi chet moi 5 phut
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now v2bx-conn-reaper.timer &>/dev/null
+    local kcfg=/boot/config-$(uname -r)
+    if [ -r "$kcfg" ] && ! grep -q '^CONFIG_INET_DIAG_DESTROY=y' "$kcfg"; then
+        echo -e "${red}Kernel thiếu CONFIG_INET_DIAG_DESTROY — ss -K không ngắt được kết nối trên máy này.${plain}"
+    fi
+    # Chạy ngay một lượt và báo số trước/sau để thấy có tác dụng không
+    local ports before after
+    ports=$(ss -tlnpH 2>/dev/null | grep '"V2bX"' | awk '{split($4,a,":"); print a[length(a)]}' | sort -u | tr '\n' ' ')
+    before=$(for p in $ports; do ss -tnH state established "( sport = :$p )" 2>/dev/null; done | wc -l)
+    /usr/local/sbin/v2bx-conn-reaper.sh
+    after=$(for p in $ports; do ss -tnH state established "( sport = :$p )" 2>/dev/null; done | wc -l)
+    echo -e "${green}Đã bật timer 5 phút.${plain} Cổng node: ${ports:-?}· kết nối vào: ${before} → ${after}"
+    echo -e "${dim}Log: journalctl -t v2bx-reaper · tắt: systemctl disable --now v2bx-conn-reaper.timer${plain}"
     press_any_key
 }
 

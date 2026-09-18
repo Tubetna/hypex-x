@@ -336,3 +336,20 @@ nhầm thì node lên mà client không vào được.
 - [ ] Cân nhắc thêm **SOCKS + HTTP** (rẻ) — xem mục 1.
 - [ ] Kiểm tra cấu hình **Reality** trên panel: SNI mượn site nào, `dest` hợp lý
       chưa, đã bật Vision chưa.
+
+## Kết nối TCP "chết" tích luỹ trên node Reality trực tiếp (CHINA 1/2, 17/09/2026)
+
+Triệu chứng: V2bX 100% CPU trên máy 1 CPU/800 MB, RSS vượt GOMEMLIMIT, `ss -s` thấy **7.000 ESTABLISHED** trên cổng
+node trong khi chỉ ~22 khách online; 80% im > 2 h (có cái 55 h), mẫu `bytes_sent:5890 / bytes_received:~8000`.
+Gốc: phiên **UDP 443 (QUIC Facebook) đi qua VLESS** bị `route.json` → `block`; Xray không đóng kết nối vào
+(cùng họ với lỗi `EndpointOverrideWriter` không có Close — v1.0.7 mới gỡ entry LinkManager, chưa đóng inbound),
+app khách (Shadowrocket, China Mobile) giữ socket mãi → ~2.300 kết nối chết/ngày. Node đi qua CDN (.17/.20)
+không dính vì CDN tự cắt kết nối im.
+
+Band-aid (từ 18/09 nằm trong bộ cài: bước **4e**, mặc định bật, tắt bằng `HXreaper=0`; máy đã cài: `hyx` → **23**)
+đang chạy trên CHINA 1 + 2: `conn-reaper.sh` (→ `/usr/local/sbin/v2bx-conn-reaper.sh`) + timer systemd
+5 phút, `ss -K` mọi kết nối vào cổng node im > 900 s → Xray nhận lỗi đọc, tự dọn goroutine, không cần restart.
+Kết quả: CN1 7.089 → 915 kết nối, CPU 100% → 6%; CN2 4.089 → 195, CPU 100% → 1,4%.
+**Việc còn treo:** vá gốc trong `core/xray/app/dispatcher` — khi outbound (blackhole/UDP) kết thúc phải đóng
+`link` phía inbound dù writer bị bọc EndpointOverrideWriter; hoặc cân nhắc bỏ `block` UDP 443 (đã có sniff quic +
+UseIPv4 từ v1.0.4) để phiên có traffic thật và tự hết theo `connIdle`.

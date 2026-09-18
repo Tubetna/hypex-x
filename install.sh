@@ -888,6 +888,55 @@ else
 fi
 
 # ==========================================
+# 4e. Dọn kết nối TCP chết (conn-reaper) — timer 5 phút
+# ==========================================
+# 17/09/2026: node Reality trực tiếp (CHINA 1/2) giữ 7.000 ESTABLISHED trong khi chỉ ~22 khách:
+# phiên UDP 443 (QUIC) qua VLESS bị route block, Xray không đóng kết nối vào, app khách giữ
+# socket mãi -> RAM vượt GOMEMLIMIT -> GC ăn 100% CPU. `ss -K` ngắt kết nối im > 15 phút
+# (Xray đã tự cắt kết nối có traffic sau connIdle 300 s nên không đụng khách thật).
+# Node sau CDN không dính nhưng chạy cũng vô hại. Tắt: HXreaper=0.
+if [ "${HXreaper:-1}" = "1" ] && [ "${INIT_SYSTEM}" = "systemd" ] && command -v ss &>/dev/null; then
+    if curl -fsSL -o /usr/local/sbin/v2bx-conn-reaper.sh "${SCRIPT_URL}/conn-reaper.sh" 2>/dev/null; then
+        chmod 755 /usr/local/sbin/v2bx-conn-reaper.sh
+        cat > /etc/systemd/system/v2bx-conn-reaper.service << 'EOF'
+[Unit]
+Description=V2bX: ngat ket noi TCP vao cong node da im qua 15 phut
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/local/sbin/v2bx-conn-reaper.sh
+EOF
+        cat > /etc/systemd/system/v2bx-conn-reaper.timer << 'EOF'
+[Unit]
+Description=V2bX: don ket noi chet moi 5 phut
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+EOF
+        systemctl daemon-reload
+        if systemctl enable --now v2bx-conn-reaper.timer &>/dev/null; then
+            ok "Dọn kết nối chết: timer 5 phút, ngắt kết nối im > 15 phút (log: journalctl -t v2bx-reaper)"
+        else
+            warn "Không bật được v2bx-conn-reaper.timer"
+        fi
+        KCFG=/boot/config-$(uname -r)
+        if [ -r "$KCFG" ] && ! grep -q '^CONFIG_INET_DIAG_DESTROY=y' "$KCFG"; then
+            warn "Kernel thiếu CONFIG_INET_DIAG_DESTROY — ss -K không ngắt được, timer sẽ chạy không"
+        fi
+    else
+        warn "Không tải được conn-reaper.sh — chạy sau bằng hyx → 23"
+    fi
+else
+    ok "Dọn kết nối chết: bỏ qua (HXreaper=0 hoặc không có systemd/ss)"
+fi
+
+# ==========================================
 # 5. Cài dịch vụ
 # ==========================================
 
