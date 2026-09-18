@@ -38,7 +38,7 @@ spin() {
     local frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0 rc
     "$@" >"$SPIN_OUT" 2>&1 & local pid=$!
     while kill -0 $pid 2>/dev/null; do
-        printf '\r  %s%s%s %s' "$(g $i)" "${frames:$((i%10)):1}" "$plain" "$msg"
+        printf '\r  %s%s%b %s' "$(g $i)" "${frames:$((i%10)):1}" "$plain" "$msg"
         i=$((i+1)); sleep 0.08
     done
     wait $pid; rc=$?
@@ -226,7 +226,7 @@ show_header() {
         # Quét gradient qua chữ 8 khung hình rồi dừng — chỉ lần mở đầu
         local f
         for f in 7 6 5 4 3 2 1 0; do
-            printf '\r  %s%s%s%s' "$bold" "$(gtext "$title" $f)" "$dim" "$sub"
+            printf '\r  %b%b%b%s' "$bold" "$(gtext "$title" $f)" "$dim" "$sub"
             sleep 0.05
         done; echo -e "$plain"
     else
@@ -258,7 +258,7 @@ show_menu() {
     echo -e "  $(m 3 4 'Bật')$(m 4 5 'Dừng')$(m 5 6 'Khởi động lại')"
     echo -e "  $(m 6 7 'Trạng thái')$(m 7 8 'Log')$(m 8 14 'Config')"
     echo ""
-    echo -e "  $(m 1 9 'Tự chạy: bật')$(m 2 10 'Tự chạy: tắt')$(m 3 11 'BBR')"
+    echo -e "  $(m 1 9 'Bật tự chạy')$(m 2 10 'Tắt tự chạy')$(m 3 11 'BBR')"
     echo -e "  $(m 4 12 'Mở cổng')$(m 5 13 'Chặn speedtest')$(m 6 20 'Ép MSS 1400')"
     echo ""
     echo -e "  $(m 7 19 'Cert LE')$(m 8 16 'Cert tự ký')$(m 9 15 'Khóa X25519')"
