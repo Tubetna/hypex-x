@@ -559,6 +559,18 @@ for (( i=1; i<=NUM_NODES; i++ )); do
         CERT_JSON=""
     fi
 
+    # 11/09/2026: node không IPv6 mà khách (Shadowrocket) đẩy IP đích IPv6 xuống -> gói rơi im.
+    # EnableDNS + UseIPv4 để Xray tự phân giải tên miền ra IPv4 (kèm sniff quic có sẵn trong nhân).
+    if [ "${CORE}" = "xray" ]; then
+        XRAY_OPT_JSON=",
+        \"XrayOptions\": {
+          \"EnableDNS\": true,
+          \"DNSType\": \"UseIPv4\"
+        }"
+    else
+        XRAY_OPT_JSON=""
+    fi
+
     NODE_JSON="    {
       \"ApiConfig\": {
         \"ApiHost\": \"${API_HOST}\",
@@ -571,7 +583,7 @@ for (( i=1; i<=NUM_NODES; i++ )); do
         \"Core\": \"${CORE}\",
         \"ListenIP\": \"0.0.0.0\",
         \"SendIP\": \"0.0.0.0\",
-        \"DeviceOnlineMinTraffic\": 100${CERT_JSON}
+        \"DeviceOnlineMinTraffic\": 100${CERT_JSON}${XRAY_OPT_JSON}
       }
     }"
 
@@ -707,11 +719,57 @@ else
     warn "Gói không kèm geo — rule geoip:/geosite: từ Panel sẽ không chạy"
 fi
 
-# File mẫu, chỉ chép khi chưa có, không đè của người dùng
-for f in route.json dns.json custom_inbound.json custom_outbound.json; do
-    [ -f "${SRC_DIR}/${f}" ] && [ ! -f "${CONF_DIR}/${f}" ] && \
-        install -m 644 "${SRC_DIR}/${f}" "${CONF_DIR}/${f}"
-done
+# File mẫu, chỉ ghi khi chưa có, không đè của người dùng.
+# route/outbound/dns là bộ đang chạy trên mọi node (.17/.20/CHINA từ 09/2026):
+#  - outbound "direct" ép UseIPv4 (node không IPv6), "block" blackhole
+#  - chặn QUIC UDP 443 (trừ DNS công cộng) — app tự rơi về TCP; sniff quic vẫn bật trong nhân
+#  - DNS 1.1.1.1/8.8.8.8 UseIPv4 có cache (thiếu file này là ~40 truy vấn DNS/s không cache)
+if [ ! -f "${CONF_DIR}/route.json" ]; then
+cat > "${CONF_DIR}/route.json" << 'JSONEOF'
+{
+  "domainStrategy": "AsIs",
+  "rules": [
+    {
+      "type": "field",
+      "network": "udp",
+      "port": "443",
+      "ip": [
+        "8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9", "149.112.112.112",
+        "2001:4860:4860::8888", "2001:4860:4860::8844",
+        "2606:4700:4700::1111", "2606:4700:4700::1001"
+      ],
+      "outboundTag": "direct"
+    },
+    { "type": "field", "network": "udp", "port": "443", "outboundTag": "block" }
+  ]
+}
+JSONEOF
+fi
+if [ ! -f "${CONF_DIR}/custom_outbound.json" ]; then
+cat > "${CONF_DIR}/custom_outbound.json" << 'JSONEOF'
+[
+  { "tag": "direct", "protocol": "freedom", "settings": { "domainStrategy": "UseIPv4" } },
+  { "tag": "block",  "protocol": "blackhole" }
+]
+JSONEOF
+fi
+if [ ! -f "${CONF_DIR}/dns.json" ]; then
+cat > "${CONF_DIR}/dns.json" << 'JSONEOF'
+{
+  "servers": [
+    { "address": "1.1.1.1", "port": 53, "queryStrategy": "UseIPv4" },
+    { "address": "8.8.8.8", "port": 53, "queryStrategy": "UseIPv4" },
+    "localhost"
+  ],
+  "queryStrategy": "UseIPv4",
+  "disableCache": false,
+  "tag": "dns_inbound"
+}
+JSONEOF
+fi
+[ -f "${SRC_DIR}/custom_inbound.json" ] && [ ! -f "${CONF_DIR}/custom_inbound.json" ] && \
+    install -m 644 "${SRC_DIR}/custom_inbound.json" "${CONF_DIR}/custom_inbound.json"
+chmod 644 "${CONF_DIR}"/route.json "${CONF_DIR}"/custom_outbound.json "${CONF_DIR}"/dns.json
 
 # Kiểm tra binary chạy được trên máy này (bắt lỗi tải nhầm kiến trúc)
 if ! "${BIN}" version &>/dev/null; then
@@ -746,6 +804,8 @@ cat > "${CONF_DIR}/config.json" << EOF
       },
       "AssetPath": "${CONF_DIR}/",
       "DnsConfigPath": "${CONF_DIR}/dns.json",
+      "RouteConfigPath": "${CONF_DIR}/route.json",
+      "OutboundConfigPath": "${CONF_DIR}/custom_outbound.json",
       "XrayConnectionConfig": {
         "handshake": 4,
         "connIdle": 30,
