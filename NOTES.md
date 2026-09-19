@@ -353,3 +353,54 @@ Kết quả: CN1 7.089 → 915 kết nối, CPU 100% → 6%; CN2 4.089 → 195, 
 **Việc còn treo:** vá gốc trong `core/xray/app/dispatcher` — khi outbound (blackhole/UDP) kết thúc phải đóng
 `link` phía inbound dù writer bị bọc EndpointOverrideWriter; hoặc cân nhắc bỏ `block` UDP 443 (đã có sniff quic +
 UseIPv4 từ v1.0.4) để phiên có traffic thật và tự hết theo `connIdle`.
+
+## Bộ cài từng sinh config thiếu UseIPv4 / RouteConfigPath (lộ 19/09/2026, vá `ee4c82a`)
+
+Cài CHINA 1 lên máy mới mới thấy: `config.json` bộ cài viết ra **không có `Options.XrayOptions {EnableDNS,
+DNSType: UseIPv4}`** và `Cores[xray]` **không trỏ `RouteConfigPath`/`OutboundConfigPath`** → `route.json` +
+`custom_outbound.json` nằm trên đĩa nhưng Xray không nạp, node chạy freedom AsIs; file mẫu lại là bản gốc V2bX
+(IPOnDemand, `socks5-warp`, `IPv6_out`). Máy không IPv6 vì thế dính lại đúng lỗi 11/09 (UDP tới đích IPv6 rơi im:
+CHINA 3 645/giờ, CHINA 4 628/giờ). Từ `ee4c82a` bộ cài tự ghi bộ 3 file chuẩn + XrayOptions; từ bản này thêm rule
+**`udp` → `::/0` → `block`** khi máy **không có default route IPv6** (sniff quic không bắt được gói không phải
+Initial, ví dụ QUIC Facebook `face:b00c`; block để app lùi TCP ngay thay vì chờ timeout).
+Node cài bằng bộ cài **trước 19/09** mà chưa vá tay: kiểm `grep -c XrayOptions /etc/V2bX/config.json` (0 là thiếu) và
+`journalctl -u V2bX -o cat --since -1h | grep -c 'accepted udp:\['` (>0 là đang rơi im).
+Dấu hiệu outbound đã nạp đúng: log ghi `>> direct`, không phải `>> IPv4_out` hay `>> [<tên node>]`.
+
+## `custom_inbound.json` làm V2bX PANIC — đừng thêm inbound lạ (19/09/2026)
+
+Thêm một inbound VLESS riêng qua `InboundConfigPath` để nhận luồng chuyển tiếp từ node khác: V2bX **panic** ngay
+khi có kết nối đầu tiên (`app/proxyman/inbound.(*tcpWorker).callback` → exit 2/INVALIDARGUMENT), systemd
+restart liên tục (CHINA 3: 13 lần trong 2 phút, khách trên máy đứt theo). Dispatcher của fork (LinkManager /
+limiter / stats theo tag node) chỉ biết inbound do panel sinh; inbound lạ không có ngữ cảnh node → nil.
+Cách đúng khi cần node A đẩy luồng sang node B: nối vào **inbound chính thức của node B** (cùng Reality/WS như
+khách) bằng **một tài khoản panel riêng** (nhóm riêng, gắn vào node B, GB/thiết bị/tốc độ không giới hạn) và đặt
+rule trên B theo domain/IP như thường — không cần sửa code, không tính GB khách 2 lần (chỉ tài khoản relay có số).
+
+## Nhà mạng của `.17`/`.20` (Hanoi Telecom) chỉ mở 22/80/443 từ quốc tế
+
+Từ HK tới `.20`: 5201/8080/8443/2053/40000… đều không tới, 22/80/443 tới; từ `.17` (cùng nhà mạng) sang `.20` thì cổng
+nào cũng tới. Hệ quả: không mở được cổng riêng cho relay/iperf trên node VN; muốn nhận luồng từ nước ngoài phải đi
+qua chính node 30 (:443 xhttp) hoặc 33 (:80 ws). Đo băng thông phải chạy iperf **server ở nước ngoài**, client từ VN.
+AWS SG mặc định chặn ICMP → `ping` tới máy AWS ra 100 % mất, không phải mất gói thật.
+
+## TikTok trên node HK: IP datacenter bị TikTok trả feed rỗng (19/09/2026)
+
+Khách "app xanh nhưng TikTok không hiện video" trên CHINA 1 (HK Communications) và CHINA 3 (AWS HK): TikTok cho
+IP datacenter nối nhưng API `aweme/v1/feed` trả 200 / **0 byte** (AWS còn 429), web trả `"region":"ALISG"` thay
+vì mã nước. Từ `.17/.20` (ISP VN) trả bình thường; từ **AWS Tokyo (CHINA 4) TikTok chạy được**. Không sửa được ở
+node; cách đang chạy: tách riêng TikTok đi qua node 33 (VN) bằng tài khoản relay (xem mục trên):
+- rule TikTok theo **domain** (~30 suffix: tiktok.com, tiktokv.com/.us/.eu, tiktokcdn*.com, byteoversea.*,
+  ibytedtos.com, ibyteimg.com, ipstatp.com, pstatp.com, muscdn.com, musical.ly, ttwstatic.com, byteglb.com,
+  bytedapm.com, isnssdk.com, sgsnssdk.com, ttlivecdn.com…) **và theo IP** (AS396986 + AS138699 Bytedance: gom
+  được `71.18.0.0/16`, `101.45.0.0/16`, `103.136.220.0/23`, `139.177.2xx`, `147.160.17x`, `130.44.21x`) — cần cả
+  hai vì TikTok nối API `71.18.x` **không gửi SNI**, sniff không ra tên, chỉ rule domain là trượt;
+- TikTok **UDP 443 → block** (ép TCP/H2; QUIC nhồi trong đường hầm TCP giật video), QUIC dịch vụ khác vẫn cho qua;
+- outbound relay VLESS **mux tắt**, `tcpFastOpen`/`tcpNoDelay`; **BBR + fq** chỉ bật congestion control
+  (`/etc/sysctl.d/91-bbr.conf`), không bật cả `tune-net.sh` (từng làm khách game khựng).
+- Chặng HK↔VN đo iperf: TCP 632–734 Mbit/s, UDP 300 Mbit mất 0,4 % jitter 0,05 ms → đường sạch, **Hysteria vô nghĩa**.
+- CHINA 1 vào TQ 49 ms (p50) nhưng ra VN 87 ms; AWS HK vào TQ 118 ms nhưng ra VN 30 ms; hai máy cách nhau 1,7 ms
+  → CHINA 1 đẩy TikTok sang CHINA 3 (Reality vào node 24) rồi CHINA 3 đẩy về `.20`. Dự phòng trên CHINA 1:
+  `route.fallback-vn-direct.json` (TikTok đi thẳng `.20`).
+- Đừng đo bằng `feed` không chữ ký (trả 0 B kể cả từ VN); đo bằng `u+d` của tài khoản relay trên panel hoặc log
+  node 33 thấy `v16m/v3.tiktokcdn.com` từ uuid relay. Khách xác nhận "ổn rồi" lúc 13:18 VN.

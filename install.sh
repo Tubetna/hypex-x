@@ -724,12 +724,21 @@ fi
 #  - outbound "direct" ép UseIPv4 (node không IPv6), "block" blackhole
 #  - chặn QUIC UDP 443 (trừ DNS công cộng) — app tự rơi về TCP; sniff quic vẫn bật trong nhân
 #  - DNS 1.1.1.1/8.8.8.8 UseIPv4 có cache (thiếu file này là ~40 truy vấn DNS/s không cache)
+# Máy không có đường IPv6 ra ngoài: khách (Shadowrocket) vẫn đẩy UDP tới đích IPv6 (QUIC Facebook
+# face:b00c...). Sniff quic đổi được phần lớn sang tên miền -> UseIPv4, nhưng gói không phải Initial thì
+# không sniff được và rơi im (đo 19/09/2026: 628 kết nối/giờ trên CHINA 4). Chặn hẳn để app lùi về TCP ngay.
+if ip -6 route show default 2>/dev/null | grep -q .; then
+    V6_UDP_RULE=""
+else
+    V6_UDP_RULE='    { "type": "field", "network": "udp", "ip": ["::/0"], "outboundTag": "block" },
+'
+fi
 if [ ! -f "${CONF_DIR}/route.json" ]; then
-cat > "${CONF_DIR}/route.json" << 'JSONEOF'
+cat > "${CONF_DIR}/route.json" << JSONEOF
 {
   "domainStrategy": "AsIs",
   "rules": [
-    {
+${V6_UDP_RULE}    {
       "type": "field",
       "network": "udp",
       "port": "443",
