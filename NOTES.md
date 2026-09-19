@@ -404,3 +404,19 @@ node; cách đang chạy: tách riêng TikTok đi qua node 33 (VN) bằng tài k
   `route.fallback-vn-direct.json` (TikTok đi thẳng `.20`).
 - Đừng đo bằng `feed` không chữ ký (trả 0 B kể cả từ VN); đo bằng `u+d` của tài khoản relay trên panel hoặc log
   node 33 thấy `v16m/v3.tiktokcdn.com` từ uuid relay. Khách xác nhận "ổn rồi" lúc 13:18 VN.
+
+## `tcpFastOpen` ở outbound freedom làm mất site với MỌI khách (19/09/2026)
+
+`custom_outbound.json` của `.20` (đợt tune-net 12–13/09) có `streamSettings.sockopt.tcpFastOpen: true` cho outbound
+`direct`. SYN mang dữ liệu (ClientHello) → WAF của `dichvucong.gov.vn` vứt im, khách node 30/33 nào vào Dịch vụ công đều
+treo, trong khi `curl` thường từ chính máy đó 200 và `curl --tcp-fastopen` treo y hệt. Chỉ lộ khi tách `.vn` qua node VN
+và so từng đường. Đã tắt TFO ở outbound `.20`, CHINA 1, CHINA 3. Quy tắc: **không bật `tcpFastOpen` ở outbound đi ra
+Internet**; chỉ dùng ở outbound nối tới node của mình nếu muốn. `tune-net.sh` hiện vẫn ghi TFO vào sockopt freedom — cần sửa.
+
+## Tách toàn bộ `.vn` + ngân hàng/ví về node VN (19/09/2026)
+
+Cùng cơ chế relay TikTok: rule `domain:vn` + tên .com của ví/ngân hàng (momo, zalopay, vnpayqr, napas, viettelpay, vtcpay,
+payoo, shopeepay, vpbank, vietcombank, bidv, techcombank, mbbank, acb, tpb, vib) → relay. Lý do: `dichvucong.gov.vn` chặn
+IP nước ngoài (treo 8 s từ HK), Techcombank 403 IP ngoại, VNeID/ngân hàng ưa IP VN, nội dung `.vn` lấy trong nước nhanh
+hơn. Nghiệm thu qua CHINA 1 → CHINA 3 → node 33: dichvucong 200, VNeID 200, VCB/MB/TPB/VPB/BIDV/Agribank/MoMo trả lời.
+VNeID còn có thể tự phát hiện VPN/root trong app — không kiểm được từ node.
