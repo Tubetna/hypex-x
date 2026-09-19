@@ -59,16 +59,28 @@ grep -q "^\* soft nofile" /etc/security/limits.conf || printf "* soft nofile 104
 mkdir -p /etc/systemd/journald.conf.d; printf "[Journal]\nSystemMaxUse=300M\nMaxRetentionSec=7day\n" > /etc/systemd/journald.conf.d/limit.conf; systemctl restart systemd-journald
 mkdir -p /etc/systemd/system/V2bX.service.d
 printf "[Service]\nNice=-10\nCPUWeight=1000\nIOWeight=1000\n" > /etc/systemd/system/V2bX.service.d/priority.conf
-# Xray: outbound TFO/NoDelay/keepalive, DNS cache, bufferSize 32
+# Xray: outbound NoDelay/keepalive, DNS cache, bufferSize 32.
+# KHONG bat tcpFastOpen o outbound ra Internet: SYN mang du lieu bi WAF mot so site vut im
+# (dichvucong.gov.vn treo cho moi khach node 30/33 tu 13/09 den 19/09/2026 vi dong nay).
+# Sysctl tcp_fastopen=3 van giu (chi hieu luc khi ung dung tu xin TFO).
+# Giu nguyen custom_outbound.json neu no da co outbound rieng (relay...), chi vá sockopt cua "direct".
 cp -f /etc/V2bX/custom_outbound.json /etc/V2bX/custom_outbound.json.bak.tune 2>/dev/null || true
 cp -f /etc/V2bX/config.json /etc/V2bX/config.json.bak.tune
-cat > /etc/V2bX/custom_outbound.json <<'EOT'
-[
- {"tag":"direct","protocol":"freedom","settings":{"domainStrategy":"UseIPv4"},
-  "streamSettings":{"sockopt":{"tcpFastOpen":true,"tcpNoDelay":true,"tcpKeepAliveIdle":300,"tcpKeepAliveInterval":30}}},
- {"tag":"block","protocol":"blackhole"}
-]
-EOT
+python3 - <<'PY'
+import json, os
+p='/etc/V2bX/custom_outbound.json'
+try:
+    o=json.load(open(p)); assert isinstance(o,list) and o
+except Exception:
+    o=[{"tag":"direct","protocol":"freedom","settings":{"domainStrategy":"UseIPv4"}},
+       {"tag":"block","protocol":"blackhole"}]
+for ob in o:
+    if ob.get("protocol")!="freedom": continue
+    so=ob.setdefault("streamSettings",{}).setdefault("sockopt",{})
+    so.pop("tcpFastOpen",None)
+    so.update({"tcpNoDelay":True,"tcpKeepAliveIdle":300,"tcpKeepAliveInterval":30})
+json.dump(o,open(p,"w"),indent=1)
+PY
 cat > /etc/V2bX/dns.json <<'EOT'
 {"servers":[{"address":"1.1.1.1","port":53,"queryStrategy":"UseIPv4"},{"address":"8.8.8.8","port":53,"queryStrategy":"UseIPv4"},"localhost"],
  "queryStrategy":"UseIPv4","disableCache":false,"tag":"dns_inbound"}

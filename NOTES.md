@@ -411,7 +411,7 @@ node; cách đang chạy: tách riêng TikTok đi qua node 33 (VN) bằng tài k
 `direct`. SYN mang dữ liệu (ClientHello) → WAF của `dichvucong.gov.vn` vứt im, khách node 30/33 nào vào Dịch vụ công đều
 treo, trong khi `curl` thường từ chính máy đó 200 và `curl --tcp-fastopen` treo y hệt. Chỉ lộ khi tách `.vn` qua node VN
 và so từng đường. Đã tắt TFO ở outbound `.20`, CHINA 1, CHINA 3. Quy tắc: **không bật `tcpFastOpen` ở outbound đi ra
-Internet**; chỉ dùng ở outbound nối tới node của mình nếu muốn. `tune-net.sh` hiện vẫn ghi TFO vào sockopt freedom — cần sửa.
+Internet**; chỉ dùng ở outbound nối tới node của mình nếu muốn. `tune-net.sh` đã sửa (commit kế tiếp): chỉ vá sockopt của outbound `freedom` — bỏ TFO, giữ NoDelay/KeepAlive — và **giữ nguyên** các outbound khác (relay) thay vì ghi đè cả file.
 
 ## Tách toàn bộ `.vn` + ngân hàng/ví về node VN (19/09/2026)
 
