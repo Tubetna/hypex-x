@@ -11,7 +11,7 @@
 #       RELAY_IP=103.5.209.20 RELAY_UUID=... RELAY_NODE=33 bash relay.sh   (không hỏi)
 #       RELAY_REMOVE=1 bash relay.sh   (gỡ)
 # Biến tuỳ chọn: RELAY_PORT (mặc định lấy từ panel/80), RELAY_HOST, RELAY_PATH (khi không có
-#   RELAY_NODE), RELAY_SVC="tiktok,youtube,play,vn,ai" (mặc định tự dò: ai chỉ khi OpenAI bị chặn),
+#   RELAY_NODE), RELAY_SVC="tiktok,youtube,play,vn,dola,ai" (mặc định tự dò: ai chỉ khi OpenAI bị chặn),
 #   RELAY_TAG (mặc định relay-vn), CONF_DIR (/etc/V2bX).
 set -u
 CONF_DIR="${CONF_DIR:-/etc/V2bX}"
@@ -85,7 +85,7 @@ fi
 
 # Dịch vụ: tự dò AI (OpenAI chặn HK) nếu không chỉ định
 if [ -z "${RELAY_SVC:-}" ]; then
-    RELAY_SVC="tiktok,youtube,play,vn"
+    RELAY_SVC="tiktok,youtube,play,vn,dola"
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://api.openai.com/v1/models 2>/dev/null)
     if [ "$code" = 403 ]; then RELAY_SVC="$RELAY_SVC,ai"; warn "OpenAI trả 403 từ máy này → relay cả ChatGPT/Claude/Gemini"; else ok "OpenAI vào được trực tiếp (HTTP ${code:-?}) → không relay AI"; fi
 fi
@@ -111,6 +111,8 @@ L = {
                      "domain:play-apps-features.googleusercontent.com"]},
  "ai": {"domain": ["domain:openai.com", "domain:chatgpt.com", "domain:oaistatic.com", "domain:oaiusercontent.com", "domain:sora.com", "domain:anthropic.com", "domain:claude.ai", "full:gemini.google.com", "domain:generativelanguage.googleapis.com", "full:aistudio.google.com"],
         "ip": ["104.18.32.47", "172.64.155.209", "104.18.39.85", "172.64.148.171", "104.18.41.241", "172.64.146.15", "162.159.140.245", "172.66.0.243", "104.18.41.158", "172.64.146.98", "104.18.33.45", "172.64.154.211", "104.18.39.16", "172.64.148.240"]},
+ # Dola (ByteDance Cici đổi tên, 11/2025) chặn vùng HK/SG: "Dola chưa được triển khai ở quốc gia này" (21/09/2026)
+ "dola": {"domain": ["domain:dola.com", "domain:cici.com", "domain:ciciai.com"]},
  "vn": {"domain": ["domain:vn", "domain:momo.vn", "domain:zalopay.com", "domain:vnpayqr.com", "domain:napas.com.vn", "domain:viettel.com", "domain:viettelpay.com", "domain:vtcpay.com", "domain:payoo.com", "domain:shopeepay.com", "domain:vpbank.com", "domain:vietcombank.com", "domain:bidv.com", "domain:techcombank.com", "domain:mbbank.com", "domain:acb.com", "domain:tpb.com", "domain:vib.com"]},
 }
 # youtube + play phải cùng lối ra: link tải APK của Play ký theo IP và nằm trên googlevideo.com
