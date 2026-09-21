@@ -996,7 +996,7 @@ EOF
         fi
         KCFG=/boot/config-$(uname -r)
         if [ -r "$KCFG" ] && ! grep -q '^CONFIG_INET_DIAG_DESTROY=y' "$KCFG"; then
-            warn "Kernel thiếu CONFIG_INET_DIAG_DESTROY — ss -K không ngắt được, timer sẽ chạy không"
+            warn "Kernel thiếu CONFIG_INET_DIAG_DESTROY — ss -K không ngắt được; V2bX ≥ v1.0.9 tự dọn trong tiến trình (V2BX_IDLE_KILL, mặc định 900 s)"
         fi
     else
         warn "Không tải được conn-reaper.sh — chạy sau bằng hyx → 23"

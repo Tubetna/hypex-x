@@ -350,9 +350,17 @@ Band-aid (từ 18/09 nằm trong bộ cài: bước **4e**, mặc định bật,
 đang chạy trên CHINA 1 + 2: `conn-reaper.sh` (→ `/usr/local/sbin/v2bx-conn-reaper.sh`) + timer systemd
 5 phút, `ss -K` mọi kết nối vào cổng node im > 900 s → Xray nhận lỗi đọc, tự dọn goroutine, không cần restart.
 Kết quả: CN1 7.089 → 915 kết nối, CPU 100% → 6%; CN2 4.089 → 195, CPU 100% → 1,4%.
-**Việc còn treo:** vá gốc trong `core/xray/app/dispatcher` — khi outbound (blackhole/UDP) kết thúc phải đóng
-`link` phía inbound dù writer bị bọc EndpointOverrideWriter; hoặc cân nhắc bỏ `block` UDP 443 (đã có sniff quic +
-UseIPv4 từ v1.0.4) để phiên có traffic thật và tự hết theo `connIdle`.
+**Đã vá trong tiến trình (v1.0.9, 21/09/2026)** — `core/xray/app/dispatcher/idlewatch.go`: mọi phiên `DispatchLink`
+có user đăng ký `session.Inbound.Conn` (mux XUDP dùng chung một conn cho nhiều phiên → đếm tham chiếu); `CounterReader`
+(chiều lên) và `idleWriter` (chiều xuống, lớp trong cùng của `outbound.Writer`) cập nhật mốc hoạt động; goroutine quét
+mỗi phút, conn im quá **`V2BX_IDLE_KILL`** giây (mặc định **900**, `0` = tắt; đặt qua drop-in systemd) thì `Close()` →
+`Process` trả về, Xray dọn phiên. Log: `[Warning] ...: idle-kill: ngắt N/M kết nối vào im > 15m0s`. Không cần
+`ss -K` nên chạy được trên kernel thiếu `CONFIG_INET_DIAG_DESTROY` (EulerOS Huawei — CHINA 2 `190.92.198.139`).
+Tái hiện để test: xray client với `mux.enabled=true, xudpProxyUDP443=allow`, gửi UDP tới IPv6 :443 qua socks rồi giữ
+kết nối điều khiển — node giữ 1 ESTABLISHED sau `-> block`; đặt `V2BX_IDLE_KILL=60` thấy dòng idle-kill sau ≤ 2 phút
+(ngưỡng 60 s cắt cả khách thật đang im, đừng để lâu). Script cũ `conn-reaper.sh` vẫn giữ trong bộ cài, vô hại khi
+chạy song song. Vì sao gốc: đường `DispatchLink` của Xray mới không có timer idle phía inbound; freedom có
+`connIdle` nhưng blackhole trả về ngay và mux conn sống theo client.
 
 ## Bộ cài từng sinh config thiếu UseIPv4 / RouteConfigPath (lộ 19/09/2026, vá `ee4c82a`)
 

@@ -412,6 +412,12 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		} else {
 			lm = lmloaded.(*LinkManager)
 		}
+		// Theo dõi kết nối vào im lặng (idlewatch.go): đăng ký conn, gỡ khi phiên kết thúc.
+		idle := idleRegister(sessionInbound.Conn)
+		defer idle.release()
+		if idle != nil {
+			outbound.Writer = &idleWriter{Writer: outbound.Writer, e: idle}
+		}
 		managedWriter := &ManagedWriter{
 			writer:  outbound.Writer,
 			manager: lm,
@@ -434,6 +440,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		outbound.Reader = &CounterReader{
 			Reader:  &buf.TimeoutWrapperReader{Reader: outbound.Reader},
 			Counter: &ts.UpCounter,
+			Idle:    idle,
 		}
 		lm.AddLink(managedWriter, outbound.Reader)
 		// Rò rỉ heap (13–14/09/2026): với UDP bị đổi đích (sniff quic, UseIPv4)
