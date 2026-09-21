@@ -853,6 +853,11 @@ ok "config.json (${NUM_NODES} node)"
 # (Xanh SM...) treo ở màn hình logo trong khi Google/Facebook vẫn chạy. PMTU đo được 1482.
 # Phải ép ở CẢ INPUT: rule OUTPUT chỉ ép cỡ gói server gửi về, cỡ gói node gửi đi theo
 # MSS trong SYN-ACK của server.
+# 21/09/2026: Debian tối giản (Huawei Cloud) chỉ có nft, không có lệnh iptables -> bước này
+# từng bị bỏ qua im lặng. Cài iptables (bản nft-backend) trước rồi mới ép MSS.
+if [ "${INIT_SYSTEM}" = "systemd" ] && ! command -v iptables &>/dev/null; then
+    ${PKG_INSTALL} iptables >/dev/null 2>&1 || warn "Không cài được iptables — bỏ qua ép MSS"
+fi
 if [ "${INIT_SYSTEM}" = "systemd" ] && command -v iptables &>/dev/null; then
     cat > /etc/sysctl.d/90-v2bx-mtu.conf << 'EOF'
 # Duong toi AWS VN rot goi 1500 byte, ICMP frag-needed khong ve -> de kernel tu ha co goi
