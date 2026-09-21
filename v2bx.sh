@@ -205,6 +205,16 @@ get_mem_status() {
     fi
 }
 
+get_relay_status() {
+    local f=/etc/V2bX/custom_outbound.json a
+    if [ -f "$f" ] && grep -q '"relay-vn"' "$f" 2>/dev/null; then
+        a=$(python3 -c 'import json;o=json.load(open("'"$f"'"));x=[e for e in o if e.get("tag")=="relay-vn"][0]["settings"]["vnext"][0];print("%s:%s"%(x["address"],x["port"]))' 2>/dev/null)
+        echo -e "${green}✓ → ${a:-?}${plain} ${dim}· $(grep -c '"hx-relay"' /etc/V2bX/route.json 2>/dev/null || echo 0) luật (menu 24)${plain}"
+    else
+        echo -e "${dim}chưa đặt (menu 24)${plain}"
+    fi
+}
+
 get_reaper_status() {
     if systemctl is-enabled v2bx-conn-reaper.timer &>/dev/null; then
         local last
@@ -240,6 +250,7 @@ show_header() {
     echo -e "  ${dim}MSS ${plain}  $(get_mss_status)"
     echo -e "  ${dim}RAM ${plain}  $(get_mem_status)"
     echo -e "  ${dim}Dọn ${plain}  $(get_reaper_status)"
+    echo -e "  ${dim}VN  ${plain}  $(get_relay_status)"
     echo -e "  $(g 9)────────────────────────────────────────────────────${plain}"
 }
 
@@ -263,7 +274,8 @@ show_menu() {
     echo ""
     echo -e "  $(m 7 19 'Cert LE')$(m 8 16 'Cert tự ký')$(m 9 15 'Khóa X25519')"
     echo -e "  $(m 0 17 'Geo')$(m 1 18 'Giới hạn TB')$(m 2 21 'Chống OOM')"
-    echo -e "  $(m 3 22 'Tối ưu mạng')$(m 4 23 'Dọn KN chết')$(m 5 0 'Thoát')"
+    echo -e "  $(m 3 22 'Tối ưu mạng')$(m 4 23 'Dọn KN chết')$(m 5 24 'Chuyển tiếp VN')"
+    echo -e "  $(m 6 0 'Thoát')"
     echo ""
     read -p "  ❯ " choice
     handle_choice "$choice"
@@ -294,6 +306,7 @@ handle_choice() {
     21) setup_mem_guard ;;
     22) tune_net ;;
     23) setup_conn_reaper ;;
+    24) setup_relay_vn ;;
     0)  echo -e "${green}Tạm biệt!${plain}"; exit 0 ;;
     *)  echo -e "  ${red}Không có mục này.${plain}"; sleep 0.7; show_menu ;;
     esac
@@ -655,6 +668,24 @@ EOF
     after=$(for p in $ports; do ss -tnH state established "( sport = :$p )" 2>/dev/null; done | wc -l)
     echo -e "${green}Đã bật timer 5 phút.${plain} Cổng node: ${ports:-?}· kết nối vào: ${before} → ${after}"
     echo -e "${dim}Log: journalctl -t v2bx-reaper · tắt: systemctl disable --now v2bx-conn-reaper.timer${plain}"
+    press_any_key
+}
+
+# 24. Chuyển tiếp dịch vụ (TikTok/YouTube/.vn/AI…) sang node VN qua tài khoản relay — relay.sh
+setup_relay_vn() {
+    echo -e "${yellow}Chuyển tiếp dịch vụ sang node VN (relay-vn)${plain}"
+    echo -e "  ${dim}1) Đặt / cập nhật   2) Gỡ   0) Quay lại${plain}"
+    read -p "  ❯ " c
+    case "$c" in
+    1) ;;
+    2) RELAY_REMOVE=1 bash /usr/local/sbin/v2bx-relay.sh 2>/dev/null || echo -e "${red}Chưa có relay.sh trên máy.${plain}"; press_any_key; return ;;
+    *) return ;;
+    esac
+    if ! curl -fsSL -o /usr/local/sbin/v2bx-relay.sh "${SCRIPT_URL}/relay.sh"; then
+        echo -e "${red}Không tải được relay.sh.${plain}"; press_any_key; return
+    fi
+    chmod 755 /usr/local/sbin/v2bx-relay.sh
+    bash /usr/local/sbin/v2bx-relay.sh
     press_any_key
 }
 

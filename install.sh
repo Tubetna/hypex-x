@@ -1011,6 +1011,28 @@ else
 fi
 
 # ==========================================
+# 4f. Chuyển tiếp dịch vụ sang node VN (relay.sh) — chỉ khi đặt HXrelayIP
+# ==========================================
+# Node HK/SG: TikTok trả feed rỗng, OpenAI chặn HK, YouTube khoá vùng VN, dichvucong/ngân
+# hàng chặn IP nước ngoài → đẩy các dịch vụ đó qua node VN bằng tài khoản relay.
+# Biến: HXrelayIP (bắt buộc) · HXrelayUUID (bắt buộc) · HXrelayNode (ID node VN trên panel,
+# tự lấy Host/path/cổng) · HXrelaySvc (tiktok,youtube,play,vn,ai — mặc định tự dò).
+if [ -n "${HXrelayIP:-}" ]; then
+    if [ -z "${HXrelayUUID:-}" ]; then
+        warn "Có HXrelayIP nhưng thiếu HXrelayUUID — bỏ qua chuyển tiếp, chạy sau bằng hyx → 24"
+    elif curl -fsSL -o /usr/local/sbin/v2bx-relay.sh "${SCRIPT_URL}/relay.sh" 2>/dev/null; then
+        chmod 755 /usr/local/sbin/v2bx-relay.sh
+        if RELAY_IP="${HXrelayIP}" RELAY_UUID="${HXrelayUUID}" RELAY_NODE="${HXrelayNode:-}"            RELAY_PORT="${HXrelayPort:-}" RELAY_HOST="${HXrelayHost:-}" RELAY_PATH="${HXrelayPath:-}"            RELAY_SVC="${HXrelaySvc:-}" CONF_DIR="${CONF_DIR}" bash /usr/local/sbin/v2bx-relay.sh </dev/null; then
+            ok "Chuyển tiếp sang ${HXrelayIP} (gỡ: RELAY_REMOVE=1 v2bx-relay.sh)"
+        else
+            warn "relay.sh thất bại — xem lỗi trên, chạy lại bằng hyx → 24"
+        fi
+    else
+        warn "Không tải được relay.sh — chạy sau bằng hyx → 24"
+    fi
+fi
+
+# ==========================================
 # 5. Cài dịch vụ
 # ==========================================
 

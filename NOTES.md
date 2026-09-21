@@ -428,3 +428,15 @@ payoo, shopeepay, vpbank, vietcombank, bidv, techcombank, mbbank, acb, tpb, vib)
 IP nước ngoài (treo 8 s từ HK), Techcombank 403 IP ngoại, VNeID/ngân hàng ưa IP VN, nội dung `.vn` lấy trong nước nhanh
 hơn. Nghiệm thu qua CHINA 1 → CHINA 3 → node 33: dichvucong 200, VNeID 200, VCB/MB/TPB/VPB/BIDV/Agribank/MoMo trả lời.
 VNeID còn có thể tự phát hiện VPN/root trong app — không kiểm được từ node.
+
+## Chuyển tiếp dịch vụ sang node VN bằng `relay.sh` (21/09/2026)
+
+Thay cho việc chép tay `route.json`/`custom_outbound.json` từ CHINA 1: `relay.sh` (bộ cài bước **4f** khi đặt
+`HXrelayIP` + `HXrelayUUID` [+ `HXrelayNode`], máy đã cài: `hyx` → **24**). Nhập **IP node VN + UUID tài khoản relay +
+ID node VN trên panel** → script gọi `/api/v1/server/UniProxy/config` (key trong `config.json`) lấy cổng/network/
+Host/path/TLS/Reality của node VN, tự dò OpenAI (403 = HK → relay thêm AI), ghi outbound `relay-vn` + 4 luật gắn
+`_tag: hx-relay` (block QUIC 443 tới các domain/IP đó, rồi domain/IP → relay-vn), chèn **sau khối UDP đầu route**
+để block QUIC đứng trước relay. Chạy lại = thay luật cũ, không nhân đôi; `RELAY_REMOVE=1` gỡ sạch. Dịch vụ:
+`tiktok` (30 domain + 22 dải IP Bytedance vì API TikTok không gửi SNI), `youtube`, `play` (tự kèm youtube — link APK
+ký theo IP nằm trên googlevideo), `vn` (`domain:vn` + ngân hàng/ví), `ai`. **Bẫy:** API panel trả `networkSettings`
+(camelCase), không phải `network_settings`. Đã kiểm trên CHINA 1 mới: YouTube `countryCode VN`, dichvucong 200.
