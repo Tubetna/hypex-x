@@ -167,7 +167,9 @@ for core in c.get("Cores",[]):
 if ch: json.dump(c,open(d+"/config.json","w"),indent=2); print("  đã thêm RouteConfigPath/OutboundConfigPath vào config.json")
 PYEOF
 
-if systemctl restart V2bX 2>/dev/null; then
+if [ "${RELAY_NO_RESTART:-0}" = 1 ]; then
+    ok "Đã ghi outbound ${TAG} → ${RELAY_IP}:${RELAY_PORT} (V2bX sẽ nạp khi khởi động)"
+elif systemctl restart V2bX 2>/dev/null; then
     sleep 3
     if systemctl is-active V2bX >/dev/null; then
         ok "V2bX chạy lại với outbound ${TAG} → ${RELAY_IP}:${RELAY_PORT}"

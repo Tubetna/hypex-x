@@ -1022,7 +1022,7 @@ if [ -n "${HXrelayIP:-}" ]; then
         warn "Có HXrelayIP nhưng thiếu HXrelayUUID — bỏ qua chuyển tiếp, chạy sau bằng hyx → 24"
     elif curl -fsSL -o /usr/local/sbin/v2bx-relay.sh "${SCRIPT_URL}/relay.sh" 2>/dev/null; then
         chmod 755 /usr/local/sbin/v2bx-relay.sh
-        if RELAY_IP="${HXrelayIP}" RELAY_UUID="${HXrelayUUID}" RELAY_NODE="${HXrelayNode:-}"            RELAY_PORT="${HXrelayPort:-}" RELAY_HOST="${HXrelayHost:-}" RELAY_PATH="${HXrelayPath:-}"            RELAY_SVC="${HXrelaySvc:-}" CONF_DIR="${CONF_DIR}" bash /usr/local/sbin/v2bx-relay.sh </dev/null; then
+        if RELAY_IP="${HXrelayIP}" RELAY_UUID="${HXrelayUUID}" RELAY_NODE="${HXrelayNode:-}"            RELAY_PORT="${HXrelayPort:-}" RELAY_HOST="${HXrelayHost:-}" RELAY_PATH="${HXrelayPath:-}"            RELAY_SVC="${HXrelaySvc:-}" CONF_DIR="${CONF_DIR}" RELAY_NO_RESTART=1 bash /usr/local/sbin/v2bx-relay.sh </dev/null; then
             ok "Chuyển tiếp sang ${HXrelayIP} (gỡ: RELAY_REMOVE=1 v2bx-relay.sh)"
         else
             warn "relay.sh thất bại — xem lỗi trên, chạy lại bằng hyx → 24"
