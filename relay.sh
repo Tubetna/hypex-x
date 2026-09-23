@@ -11,7 +11,7 @@
 #       RELAY_IP=103.5.209.20 RELAY_UUID=... RELAY_NODE=33 bash relay.sh   (không hỏi)
 #       RELAY_REMOVE=1 bash relay.sh   (gỡ)
 # Biến tuỳ chọn: RELAY_PORT (mặc định lấy từ panel/80), RELAY_HOST, RELAY_PATH (khi không có
-#   RELAY_NODE), RELAY_SVC="tiktok,youtube,play,vn,dola,ai" (mặc định tự dò: ai chỉ khi OpenAI bị chặn),
+#   RELAY_NODE), RELAY_SVC="tiktok,youtube,play,vn,dola,ai" (mặc định BẬT hết gồm cả ai; bỏ "ai" để tắt),
 #   RELAY_TAG (mặc định relay-vn), CONF_DIR (/etc/V2bX).
 set -u
 CONF_DIR="${CONF_DIR:-/etc/V2bX}"
