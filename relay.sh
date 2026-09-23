@@ -83,11 +83,15 @@ if [ "$TLS" = 2 ]; then
     [ -z "$SNI" ] && ask SNI "Reality server name" "www.apple.com"
 fi
 
-# Dịch vụ: tự dò AI (OpenAI chặn HK) nếu không chỉ định
+# Dịch vụ: mặc định BẬT relay AI cho mọi node relay (HK/SG).
+# Trước đây tự dò bằng `api.openai.com/v1/models` — KHÔNG tin được: từ SG endpoint đó trả 401 (đọc được)
+# nên probe kết luận "không cần relay AI", trong khi khách dùng app ChatGPT hit `chatgpt.com/backend-api`
+# thì bị 403 `unsupported_country` (SG bị chặn ở chatgpt.com dù api.openai.com cho vào). Đo 23/09/2026:
+# mọi endpoint OpenAI trả mã GIỐNG nhau ở VN (được phép) và SG (bị chặn) qua curl → không có probe đáng tin.
+# Mọi node chạy relay đều là HK/SG và đều cần relay AI (CHINA 4 Nhật không chạy relay nên không dính).
+# Muốn TẮT relay AI: đặt RELAY_SVC/HXrelaySvc tường minh và bỏ "ai" (vd "tiktok,youtube,play,vn,dola").
 if [ -z "${RELAY_SVC:-}" ]; then
-    RELAY_SVC="tiktok,youtube,play,vn,dola"
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://api.openai.com/v1/models 2>/dev/null)
-    if [ "$code" = 403 ]; then RELAY_SVC="$RELAY_SVC,ai"; warn "OpenAI trả 403 từ máy này → relay cả ChatGPT/Claude/Gemini"; else ok "OpenAI vào được trực tiếp (HTTP ${code:-?}) → không relay AI"; fi
+    RELAY_SVC="tiktok,youtube,play,vn,dola,ai"
 fi
 echo -e "  Dịch vụ chuyển tiếp: ${yellow}${RELAY_SVC}${plain}"
 
