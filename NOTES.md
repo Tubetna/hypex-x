@@ -440,3 +440,14 @@ Host/path/TLS/Reality của node VN, tự dò OpenAI (403 = HK → relay thêm A
 `tiktok` (30 domain + 22 dải IP Bytedance vì API TikTok không gửi SNI), `youtube`, `play` (tự kèm youtube — link APK
 ký theo IP nằm trên googlevideo), `vn` (`domain:vn` + ngân hàng/ví), `ai`. **Bẫy:** API panel trả `networkSettings`
 (camelCase), không phải `network_settings`. Đã kiểm trên CHINA 1 mới: YouTube `countryCode VN`, dichvucong 200.
+
+### 23/09/2026 — relay đi TLS: dùng node 30 (XHTTP stream-one :443) thay node 33 (WS :80 trần)
+
+Chặng HK/SG → `.20` trước đi **WS :80 không mã hoá** → nhà mạng trung chuyển đọc được tên miền khách vào và
+UUID tài khoản relay. Đổi sang node **30** (`HXrelayNode=30`, nhóm 66 đã gắn vào node 30): VLESS + XHTTP
+`stream-one` + TLS (cert LE `cloudbasicz`, nối **thẳng IP** `.20`, không qua CDN nên stream-one chạy được).
+Đo A/B từ CHINA 1, xen kẽ: byte đầu **nhanh hơn ~90 ms mỗi kết nối mới** (YouTube 0,26 → 0,17 s, ChatGPT
+0,21 → 0,12 s — HTTP/2 dùng chung một đường TLS, khỏi bắt tay TCP+WS mỗi lần), tải 31 → 35–36 MB/s, 12 kết nối
+song song ngang nhau. `relay.sh` giờ lấy `mode` XHTTP từ panel (trước ép `packet-up`) và thêm `alpn h2`.
+Đã đổi trên CHINA 1 (×3 máy), CHINA 2, CHINA 5; CHINA 3 (SSH key) còn WS :80. Lưu lượng relay nay hiện ở
+node 30 trên panel thay vì node 33.

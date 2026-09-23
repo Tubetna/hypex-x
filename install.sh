@@ -1015,7 +1015,7 @@ fi
 # ==========================================
 # Node HK/SG: TikTok trả feed rỗng, OpenAI chặn HK, YouTube khoá vùng VN, dichvucong/ngân
 # hàng chặn IP nước ngoài → đẩy các dịch vụ đó qua node VN bằng tài khoản relay.
-# Biến: HXrelayIP (bắt buộc) · HXrelayUUID (bắt buộc) · HXrelayNode (ID node VN trên panel,
+# Biến: HXrelayIP (bắt buộc) · HXrelayUUID (bắt buộc) · HXrelayNode (ID node VN trên panel — nên 30 = TLS :443,
 # tự lấy Host/path/cổng) · HXrelaySvc (tiktok,youtube,play,vn,dola,ai — mặc định BẬT hết, gồm cả AI).
 if [ -n "${HXrelayIP:-}" ]; then
     if [ -z "${HXrelayUUID:-}" ]; then

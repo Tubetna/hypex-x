@@ -8,7 +8,9 @@
 # dịch vụ đó bị block để app lùi về TCP (QUIC-trong-TCP tệ cho video).
 #
 # Dùng: bash relay.sh            (hỏi từng mục)
-#       RELAY_IP=103.5.209.20 RELAY_UUID=... RELAY_NODE=33 bash relay.sh   (không hỏi)
+#       RELAY_IP=103.5.209.20 RELAY_UUID=... RELAY_NODE=30 bash relay.sh   (không hỏi)
+#   Nên chọn node VN có TLS (node 30 = XHTTP stream-one :443): chặng HK/SG → VN được mã hoá, và nhờ HTTP/2
+#   dùng chung kết nối nên mở kết nối mới còn nhanh hơn WS :80 trần (node 33) ~90 ms (đo 23/09/2026).
 #       RELAY_REMOVE=1 bash relay.sh   (gỡ)
 # Biến tuỳ chọn: RELAY_PORT (mặc định lấy từ panel/80), RELAY_HOST, RELAY_PATH (khi không có
 #   RELAY_NODE), RELAY_SVC="tiktok,youtube,play,vn,dola,ai" (mặc định BẬT hết gồm cả ai; bỏ "ai" để tắt),
@@ -52,7 +54,7 @@ ask RELAY_NODE "ID node VN trên panel (Enter nếu nhập tay Host/path)" ""
 
 API_HOST=$(python3 -c 'import json;c=json.load(open("'"$CONF_DIR"'/config.json"));print(c["Nodes"][0]["ApiConfig"]["ApiHost"])' 2>/dev/null)
 API_KEY=$(python3 -c 'import json;c=json.load(open("'"$CONF_DIR"'/config.json"));print(c["Nodes"][0]["ApiConfig"]["ApiKey"])' 2>/dev/null)
-NET=ws; TLS=0; SNI=""; PBK=""; SID=""
+NET=ws; TLS=0; SNI=""; PBK=""; SID=""; XMODE=""
 if [ -n "${RELAY_NODE:-}" ]; then
     J=$(curl -fsSL --max-time 15 "${API_HOST}/api/v1/server/UniProxy/config?node_id=${RELAY_NODE}&node_type=vless&token=${API_KEY}") \
         || die "Không lấy được cấu hình node ${RELAY_NODE} từ panel (sai ID? node không phải VLESS?)."
@@ -65,6 +67,7 @@ print("NET=%s" % shlex.quote(c.get("network","tcp") or "tcp"))
 print("TLS=%s" % shlex.quote(str(c.get("tls",0))))
 print("RELAY_HOST_P=%s" % shlex.quote(hdr.get("Host") or ns.get("host") or (c.get("tls_settings") or {}).get("server_name") or ""))
 print("RELAY_PATH_P=%s" % shlex.quote(ns.get("path","") or ""))
+print("XMODE=%s" % shlex.quote(ns.get("mode","") or ""))
 ts=c.get("tls_settings") or {}
 print("SNI=%s" % shlex.quote(ts.get("server_name","") or ""))
 print("PBK=%s" % shlex.quote(ts.get("public_key","") or ""))
@@ -101,7 +104,7 @@ if timeout 5 bash -c "</dev/tcp/${RELAY_IP}/${RELAY_PORT}" 2>/dev/null; then ok 
 cp -a "$CONF_DIR/route.json" "$CONF_DIR/route.json.bak_relay_$(date +%Y%m%d_%H%M%S)"
 cp -a "$CONF_DIR/custom_outbound.json" "$CONF_DIR/custom_outbound.json.bak_relay_$(date +%Y%m%d_%H%M%S)"
 
-export CONF_DIR TAG RELAY_IP RELAY_PORT RELAY_UUID NET TLS RELAY_HOST RELAY_PATH SNI PBK SID RELAY_SVC
+export CONF_DIR TAG RELAY_IP RELAY_PORT RELAY_UUID NET TLS RELAY_HOST RELAY_PATH SNI PBK SID RELAY_SVC XMODE
 python3 - << 'PYEOF'
 import json, os
 E=os.environ; d=E["CONF_DIR"]; tag=E["TAG"]
@@ -136,9 +139,13 @@ ss={"network":E["NET"],"sockopt":{"tcpFastOpen":False,"tcpNoDelay":True,"tcpKeep
 if E["NET"]=="ws":
     ss["wsSettings"]={"path":E["RELAY_PATH"] or "/","headers":{"Host":E["RELAY_HOST"]} if E["RELAY_HOST"] else {}}
 elif E["NET"] in ("xhttp","splithttp"):
-    ss["network"]="xhttp"; ss["xhttpSettings"]={"path":E["RELAY_PATH"] or "/","host":E["RELAY_HOST"],"mode":"packet-up"}
+    # mode theo node VN trên panel: relay nối thẳng IP node (không qua CDN) nên stream-one chạy được;
+    # node không ghi mode thì packet-up (an toàn cả khi có Cloudflare ở giữa)
+    ss["network"]="xhttp"; ss["xhttpSettings"]={"path":E["RELAY_PATH"] or "/","host":E["RELAY_HOST"],"mode":E.get("XMODE") or "packet-up"}
 if E["TLS"]=="1":
-    ss["security"]="tls"; ss["tlsSettings"]={"serverName":E["RELAY_HOST"] or E["SNI"],"fingerprint":"chrome"}
+    ss["security"]="tls"; ss["tlsSettings"]={"serverName":E["SNI"] or E["RELAY_HOST"],"fingerprint":"chrome"}
+    if ss["network"]=="xhttp":
+        ss["tlsSettings"]["alpn"]=["h2"]
 elif E["TLS"]=="2":
     user["flow"]="xtls-rprx-vision"
     ss["security"]="reality"; ss["realitySettings"]={"serverName":E["SNI"],"fingerprint":"chrome","publicKey":E["PBK"],"shortId":E["SID"]}
