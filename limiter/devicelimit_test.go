@@ -82,6 +82,64 @@ func TestCgnatSameSubnetNotRejected(t *testing.T) {
 	}
 }
 
+func newTestLimiter1(alive *panel.AliveMap) *Limiter {
+	Init()
+	users := []panel.UserInfo{{Id: 9, Uuid: "u9", DeviceLimit: 1}}
+	return AddLimiter("node", &conf.LimitConfig{}, users, alive)
+}
+
+// Ca thật 04/10 (ndbn@, 37375): máy được đếm bằng IPv6 VNPT, cùng máy đó mở
+// kết nối qua IPv4 Vinaphone → trước bị chặn, giờ phải cho qua.
+func TestDualStackSamePhoneAllowed(t *testing.T) {
+	l := newTestLimiter1(&panel.AliveMap{
+		Alive:  map[int]int{9: 1},
+		IPs:    map[int][]string{9: {"2001:ee0:26d:519b:1c09:11ff:fe53:df39"}},
+		Family: map[int][2]int{9: {0, 1}},
+	})
+	if _, reject := l.CheckLimit("node|u9", "113.185.87.50", true, true); reject {
+		t.Fatal("nửa IPv4 của máy đã đếm bằng IPv6 bị chặn")
+	}
+}
+
+// Gói 1 máy: máy thứ hai thật (khác dải, CÙNG họ đã đủ) vẫn phải chặn.
+func TestSecondDeviceSameFamilyStillRejected(t *testing.T) {
+	l := newTestLimiter1(&panel.AliveMap{
+		Alive:  map[int]int{9: 1},
+		IPs:    map[int][]string{9: {"27.67.209.6", "2402:800:9d70:7608::1"}},
+		Family: map[int][2]int{9: {1, 1}},
+	})
+	if _, reject := l.CheckLimit("node|u9", "27.67.101.185", true, true); !reject {
+		t.Fatal("IPv4 thứ hai (dải khác) khi họ IPv4 đã đủ mà không bị chặn")
+	}
+	if _, reject := l.CheckLimit("node|u9", "2001:ee0:8209:bf79::5", true, true); !reject {
+		t.Fatal("IPv6 thứ hai (dải khác) khi họ IPv6 đã đủ mà không bị chặn")
+	}
+}
+
+// Panel cũ không gửi alive_family → node tự đếm theo họ từ alive_ips.
+func TestFamilyFallbackFromIPs(t *testing.T) {
+	l := newTestLimiter1(&panel.AliveMap{
+		Alive: map[int]int{9: 1},
+		IPs:   map[int][]string{9: {"2001:ee0:26d:519b::1"}},
+	})
+	if _, reject := l.CheckLimit("node|u9", "113.185.79.217", true, true); reject {
+		t.Fatal("fallback: IPv4 đầu tiên khi chỉ có IPv6 bị chặn")
+	}
+	l2 := newTestLimiter1(&panel.AliveMap{
+		Alive: map[int]int{9: 1},
+		IPs:   map[int][]string{9: {"171.255.120.161"}},
+	})
+	if _, reject := l2.CheckLimit("node|u9", "27.68.87.205", true, true); !reject {
+		t.Fatal("fallback: IPv4 thứ hai khác dải mà không bị chặn")
+	}
+}
+
+func TestFamilyOf(t *testing.T) {
+	if familyOf("1.2.3.4") != 0 || familyOf("::ffff:1.2.3.4") != 0 || familyOf("2001:db8::1") != 1 {
+		t.Fatal("familyOf sai")
+	}
+}
+
 func TestSubnetKey(t *testing.T) {
 	cases := map[string]string{
 		"222.188.99.85":  "222.188.99.0/24",

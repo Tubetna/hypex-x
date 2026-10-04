@@ -35,6 +35,9 @@ type Limiter struct {
 	// đã gom theo /24 (IPv4) · /64 (IPv6). IP mới thuộc một dải đã biết là máy
 	// cũ vừa bị CGNAT đổi IP, không phải thiết bị mới → không chặn.
 	AliveNets map[int]map[string]struct{} // Key: Uid, value: set dải
+	// AliveFamily: số thiết bị panel đếm riêng từng họ [IPv4, IPv6] (xem
+	// overDeviceLimit). Panel cũ không gửi thì tự đếm số dải trong AliveNets.
+	AliveFamily map[int][2]int
 	// RealIP: IP đã có kết nối tới đích KHÔNG phải máy chủ đo độ trễ trong lượt
 	// báo cáo hiện tại. Chỉ IP nằm trong đây mới được báo lên panel làm thiết bị.
 	RealIP *sync.Map // Key: TagUUID + "|" + Ip, value: struct{}
@@ -86,18 +89,38 @@ func (l *Limiter) SetAlive(alive *panel.AliveMap) {
 		return
 	}
 	nets := make(map[int]map[string]struct{}, len(alive.IPs))
+	fam := make(map[int][2]int, len(alive.IPs))
 	for uid, list := range alive.IPs {
 		set := make(map[string]struct{}, len(list))
+		// Dự phòng khi panel cũ không gửi alive_family: đếm IP THÔ theo họ (chặt
+		// hơn đếm theo dải — panel cũ có thể đã đếm thô, đừng nới quá tay).
+		var cnt [2]int
 		for _, ip := range list {
 			set[subnetKey(strings.TrimPrefix(ip, "::ffff:"))] = struct{}{}
+			cnt[familyOf(ip)]++
 		}
 		nets[uid] = set
+		fam[uid] = cnt
+	}
+	// Panel mới gửi số đếm theo họ (đã lọc IP ping/test) — chính xác hơn tự đếm.
+	for uid, cnt := range alive.Family {
+		fam[uid] = cnt
 	}
 	if alive.Alive == nil {
 		alive.Alive = make(map[int]int)
 	}
 	l.AliveList = alive.Alive
 	l.AliveNets = nets
+	l.AliveFamily = fam
+}
+
+// familyOf: 0 = IPv4, 1 = IPv6.
+func familyOf(ip string) int {
+	p := net.ParseIP(strings.TrimPrefix(ip, "::ffff:"))
+	if p != nil && p.To4() == nil {
+		return 1
+	}
+	return 0
 }
 
 // overDeviceLimit: IP này có bị coi là thiết bị vượt giới hạn không.
@@ -117,6 +140,13 @@ func (l *Limiter) overDeviceLimit(uid, deviceLimit int, ip string) bool {
 		if _, known := set[subnetKey(strings.TrimPrefix(ip, "::ffff:"))]; known {
 			return false // IP mới nhưng cùng dải máy đã đếm → CGNAT đổi IP, tha
 		}
+	}
+	// (4) Đếm theo TỪNG HỌ địa chỉ: chỉ chặn khi họ của IP này (IPv4 hoặc IPv6)
+	// đã đủ máy. Điện thoại 4G VN vừa có IPv4 vừa có IPv6, mỗi kết nối qua CDN đi
+	// một họ tuỳ lượt — đếm gộp thì một máy thành hai, gói 1 thiết bị bị chặn
+	// liên tục ("vài phút lại ngắt, phải tắt bật app").
+	if cnt, ok := l.AliveFamily[uid]; ok && cnt[familyOf(ip)] < deviceLimit {
+		return false // họ này còn chỗ → nhiều khả năng là nửa IPv4/IPv6 của máy đã đếm
 	}
 	return true
 }
@@ -159,6 +189,7 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		delete(l.UUIDtoUID, deleted[i].Uuid)
 		delete(l.AliveList, deleted[i].Id)
 		delete(l.AliveNets, deleted[i].Id)
+		delete(l.AliveFamily, deleted[i].Id)
 	}
 	for i := range added {
 		userLimit := &UserLimitInfo{

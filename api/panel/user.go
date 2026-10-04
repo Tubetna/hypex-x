@@ -34,9 +34,14 @@ type UserListBody struct {
 //     Node dùng danh sách này để nhận ra "IP này là máy đã đếm rồi, vừa đổi node"
 //     thay vì coi nó là thiết bị mới và chặn. Panel cũ không trả trường này thì
 //     IPs rỗng → node hành xử như trước.
+//   - Family: số thiết bị đếm RIÊNG từng họ địa chỉ [IPv4, IPv6]. Một điện thoại
+//     4G vừa có IPv4 vừa có IPv6 (app/CDN chọn họ nào tuỳ lượt) — đếm gộp thì
+//     thành 2 máy. Node dùng số này để chỉ chặn IP lạ khi CHÍNH họ của nó đã đủ
+//     máy. Panel cũ không trả → node tự đếm từ IPs.
 type AliveMap struct {
-	Alive map[int]int      `json:"alive"`
-	IPs   map[int][]string `json:"alive_ips"`
+	Alive  map[int]int      `json:"alive"`
+	IPs    map[int][]string `json:"alive_ips"`
+	Family map[int][2]int   `json:"alive_family"`
 }
 
 // KnownIP cho biết panel có đang ghi nhận ip này là của uid không.
