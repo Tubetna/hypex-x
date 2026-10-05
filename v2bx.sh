@@ -779,7 +779,11 @@ do_update() {
     echo -e "  Đang chạy ${B1}${cur:-?}${R0}   ·   Mới nhất ${B1}${lat:-không hỏi được GitHub}${R0}"
     if [ "$mode" = auto ]; then
         [ -z "$lat" ] && { echo "  không hỏi được GitHub — để lần sau"; return 0; }
-        if [ "$cur" != "$lat" ] && [ "$LAT_AGE" -ge 0 ] && [ "$LAT_AGE" -lt "$AUTO_MIN_AGE" ]; then
+        if [ "$cur" != "$lat" ] && [ "$LAT_AGE" -lt 0 ]; then
+            echo "  không đọc được ngày phát hành ${lat} — để lần sau (không tự cài khi chưa chắc đủ 24 giờ)"
+            update_hyx_script; return 0
+        fi
+        if [ "$cur" != "$lat" ] && [ "$LAT_AGE" -lt "$AUTO_MIN_AGE" ]; then
             echo "  ${lat} mới phát hành $(fmt_dur "$LAT_AGE") trước — chờ đủ $(( AUTO_MIN_AGE / 3600 )) giờ mới tự cài"
             update_hyx_script; return 0
         fi
@@ -903,9 +907,9 @@ autoupdate_off() {
     systemctl disable --now hyx-autoupdate.timer >/dev/null 2>&1
     echo -e "  ${yellow}○${plain} tự cập nhật: TẮT (cập nhật tay bằng menu 2)"
 }
-autoupdate_next() {
-    local t; t=$(systemctl show hyx-autoupdate.timer -p NextElapseUSecRealtime --value 2>/dev/null)
-    [ -n "$t" ] && [ "$t" != n/a ] && TZ=Asia/Ho_Chi_Minh date -d "$t" '+%H:%M %d/%m (giờ VN)' 2>/dev/null || echo "?"
+autoupdate_next() {   # đọc dạng epoch: `date` bản Rust (Ubuntu 26.04) đọc sai chuỗi "… UTC" → lệch 7 giờ
+    local e; e=$(systemctl show hyx-autoupdate.timer -p NextElapseUSecRealtime --value --timestamp=unix 2>/dev/null | tr -d '@')
+    [[ "$e" =~ ^[0-9]+$ ]] && TZ=Asia/Ho_Chi_Minh date -d "@$e" '+%H:%M %d/%m (giờ VN)' 2>/dev/null || echo "?"
 }
 autoupdate_last() {   # dòng kết quả của lần chạy gần nhất
     journalctl -u hyx-autoupdate.service -n 30 -o cat --no-pager 2>/dev/null \
