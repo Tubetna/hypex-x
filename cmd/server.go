@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"syscall"
 
+	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/conf"
 	vCore "github.com/InazumaV/V2bX/core"
 	"github.com/InazumaV/V2bX/limiter"
@@ -40,6 +41,7 @@ func init() {
 
 func serverHandle(_ *cobra.Command, _ []string) {
 	showVersion()
+	panel.Version = version
 	c := conf.New()
 	err := c.LoadFromPath(config)
 	if err != nil {

@@ -16,6 +16,10 @@ import (
 
 // Panel is the interface for different panel's api.
 
+// Version là phiên bản V2bX, cmd gán lúc khởi động; gửi kèm mỗi lần gọi panel
+// (User-Agent + X-V2bX-Version) để panel biết từng máy đang chạy bản nào.
+var Version = "dev"
+
 type Client struct {
 	client           *resty.Client
 	APIHost          string
@@ -54,6 +58,8 @@ func New(c *conf.ApiConfig) (*Client, error) {
 		}
 	})
 	client.SetBaseURL(c.APIHost)
+	client.SetHeader("User-Agent", "V2bX/"+Version)
+	client.SetHeader("X-V2bX-Version", Version)
 	// Check node type
 	c.NodeType = strings.ToLower(c.NodeType)
 	switch c.NodeType {

@@ -1,7 +1,8 @@
 #!/bin/bash
 # hx-ddos — lọc DDoS trên máy node Reality (28/09/2026, sau đợt flood UDP cổng ngẫu nhiên + dội SSH vào node China).
 #
-#   hx-ddos on | off | status | boot   (cấu hình ở /etc/hx-ddos.conf: PORT, ALLOW_SSH; boot = tự bật khi khởi động)
+#   hx-ddos on | off | status | boot | unboot   (cấu hình ở /etc/hx-ddos.conf: PORT [nhiều cổng cách dấu cách],
+#   ALLOW_SSH; boot = tự bật khi khởi động). Sửa dễ nhất qua menu: hyx → 25.
 #
 # Chuỗi HX-DDOS chèn đầu INPUT:
 #   - kết nối đã có (ESTABLISHED/RELATED) → cho qua (phản hồi UDP game/thoại của khách, DNS, relay đều là chiều ra)
@@ -51,9 +52,12 @@ on() {
         else
             $T -A $C -p ipv6-icmp -j RETURN
         fi
-        $T -A $C -p tcp --dport "$PORT" --syn -m hashlimit --hashlimit-name hx$T --hashlimit-mode srcip \
-            --hashlimit-above 30/second --hashlimit-burst 60 -j DROP
-        $T -A $C -p tcp --dport "$PORT" -j RETURN
+        # PORT có thể là nhiều cổng cách nhau dấu cách (vd "80 443" — máy chạy 2 node)
+        for P in $PORT; do
+            $T -A $C -p tcp --dport "$P" --syn -m hashlimit --hashlimit-name "hx$T$P" --hashlimit-mode srcip \
+                --hashlimit-above 30/second --hashlimit-burst 60 -j DROP
+            $T -A $C -p tcp --dport "$P" -j RETURN
+        done
         $T -A $C -j DROP
         $T -I INPUT 1 -j $C
     done
@@ -96,6 +100,7 @@ UNIT
 case "${1:-status}" in
     on) on ;;
     boot) install_boot ;;
+    unboot) systemctl disable hx-ddos.service >/dev/null 2>&1; echo "hx-ddos: khong tu bat khi khoi dong" ;;
     off) off ;;
     *) status ;;
 esac

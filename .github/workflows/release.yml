@@ -144,6 +144,13 @@ jobs:
           mkdir -p build_assets
           GOEXPERIMENT=jsonv2 go build -v -o build_assets/V2bX -tags "sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid="
 
+      - name: Test + thử chạy binary (linux/amd64)
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          GOEXPERIMENT=jsonv2 go test ./limiter/... ./api/...
+          ./build_assets/V2bX version | tee /tmp/ver.txt
+          grep -q -- "$version" /tmp/ver.txt
+
       - name: Build Mips softfloat V2bX
         if: matrix.goarch == 'mips' || matrix.goarch == 'mipsle'
         run: |
@@ -159,14 +166,15 @@ jobs:
           cp ${GITHUB_WORKSPACE}/README.md ./build_assets/README.md
           cp ${GITHUB_WORKSPACE}/LICENSE ./build_assets/LICENSE
           cp ${GITHUB_WORKSPACE}/example/*.json ./build_assets/
-          LIST=('geoip' 'geosite')
-          for i in "${LIST[@]}"
-          do
-            DOWNLOAD_URL="https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/${i}.dat"
-            FILE_NAME="${i}.dat"
-            echo -e "Downloading ${DOWNLOAD_URL}..."
-            curl -L "${DOWNLOAD_URL}" -o ./build_assets/${FILE_NAME}
-          done
+          # Đủ 4 file geo: .dat cho lõi xray, .db cho lõi sing. Thiếu .db là `geoip:private` hỏng
+          # (dính 21/09/2026) — tải hỏng hoặc file rỗng thì dừng build, không phát hành gói thiếu.
+          set -e
+          dl() { curl -fL --retry 3 -o "./build_assets/$2" "$1"; [ "$(stat -c%s ./build_assets/$2)" -gt 100000 ] || { echo "geo $2 qua nho"; exit 1; }; }
+          dl https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat geoip.dat
+          dl https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat geosite.dat
+          dl https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db geoip.db
+          dl https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite.db geosite.db
+          ls -l ./build_assets
       - name: Create ZIP archive
         shell: bash
         run: |
@@ -197,3 +205,5 @@ jobs:
           file: ./V2bX-${{ steps.get_filename.outputs.ASSET_NAME }}.zip*
           tag: ${{ github.ref }}
           file_glob: true
+          # ghi đè asset trùng tên (trước đây không ghi đè → release lẫn file tay + file bot)
+          overwrite: true

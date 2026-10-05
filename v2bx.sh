@@ -67,7 +67,7 @@ nap() {
     return 0
 }
 cur_off() { anim_ok && printf '%s' "${ESC}[?25l"; }
-cur_on()  { printf '%s' "${ESC}[?25h"; }
+cur_on()  { [ -t 1 ] && printf '%s' "${ESC}[?25h"; return 0; }
 trap 'cur_on' EXIT
 trap 'cur_on; printf "%s\n" "$R0"; exit 130' INT TERM
 # Spinner: spin "việc đang làm" lệnh... — chạy lệnh nền; vòng quay + thanh chạy qua lại + số giây
@@ -615,15 +615,16 @@ declare -A LABEL=(
     [11]='BBR' [12]='Mở cổng' [13]='Chặn speedtest' [20]='Ép MSS 1400'
     [21]='Chống OOM' [22]='Tối ưu mạng' [23]='Dọn KN chết' [24]='Chuyển tiếp VN'
     [19]='Cert LE' [16]='Cert tự ký' [15]='Khóa X25519' [17]='Cập nhật geo'
+    [25]='Chống DDoS' [26]='Sức khoẻ'
     [0]='Thoát'
 )
 MENU_GROUPS=(
     'DỊCH VỤ|1 2 3 4 5 6 9 10'
-    'THEO DÕI|7 8 14 18'
-    'MẠNG & HIỆU NĂNG|11 12 13 20 21 22 23 24'
+    'THEO DÕI|7 26 8 14 18'
+    'MẠNG & HIỆU NĂNG|11 12 13 20 21 22 23 24 25'
     'CHỨNG CHỈ & DỮ LIỆU|19 16 15 17'
 )
-MENU_TOTAL=25
+MENU_TOTAL=27
 # Nhãn số: nền gradient, chữ đen đậm
 pill() { printf '%s%s%s%3s %s' "${GB[$(( $2 * NG / MENU_TOTAL % NG ))]}" "${B1}" "${ESC}[38;5;16m" "$1" "$R0"; }
 menu_item() {   # menu_item <số> <thứ tự> → "▌ 1  Cài đặt      " đúng bề ngang ô
@@ -709,6 +710,8 @@ handle_choice() {
     22) tune_net ;;
     23) setup_conn_reaper ;;
     24) setup_relay_vn ;;
+    25) ddos_menu ;;
+    26) check_health ;;
     0)  bye ;;
     *)  toast_err "Không có mục này"; sleep 0.8; show_menu ;;
     esac
@@ -721,76 +724,353 @@ install_v2bx() {
     press_any_key
 }
 
-update_v2bx() {
+# ══════════════════════════════════════════
+#   Cập nhật V2bX có kiểm tra + tự lùi (menu 2 · lệnh: hyx update [--force])
+# ══════════════════════════════════════════
+HX_REPO="${V2BX_REPO:-Tubetna/hypex-x}"
+cur_ver()    { "$BINARY" version 2>/dev/null | grep -o 'v[0-9][0-9.]*' | head -1; }
+latest_ver() {
+    curl -fsSL --connect-timeout 8 -m 15 "https://api.github.com/repos/${HX_REPO}/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/'
+}
+# Cổng TCP V2bX đang nghe (để so trước/sau khi nâng)
+node_ports() {   # bỏ cổng chỉ nghe nội bộ (vd pprof 127.0.0.1:6060)
+    ss -Hltnp 2>/dev/null | grep '"V2bX"' | awk '{print $4}' | grep -vE '^(127\.|\[::1\]|::1)' \
+        | sed 's/.*://' | sort -un | tr '\n' ' ' | sed 's/ $//'
+}
+unzip_to() {   # unzip_to <zip> <thư mục>
+    if command -v unzip &>/dev/null; then unzip -oq "$1" -d "$2"
+    else python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$1" "$2"; fi
+}
+update_hyx_script() {
+    if curl -fsL --connect-timeout 15 -o /usr/local/bin/hyx.new "${SCRIPT_URL}/v2bx.sh" \
+       && bash -n /usr/local/bin/hyx.new 2>/dev/null; then
+        mv -f /usr/local/bin/hyx.new /usr/local/bin/hyx; chmod +x /usr/local/bin/hyx
+        ln -sf /usr/local/bin/hyx /usr/local/bin/v2bx; ln -sf /usr/local/bin/hyx /usr/local/bin/hypex-x
+        echo -e "  ${green}✓${plain} lệnh hyx: bản mới nhất"
+    else
+        rm -f /usr/local/bin/hyx.new
+    fi
+    # hx-ddos (nếu máy có) cũng kéo bản mới — chỉ thay file, luật đang chạy giữ nguyên
+    if [ -x /usr/local/sbin/hx-ddos ] && curl -fsL --connect-timeout 15 -o /usr/local/sbin/hx-ddos.new "${SCRIPT_URL}/hx-ddos.sh" \
+       && bash -n /usr/local/sbin/hx-ddos.new 2>/dev/null; then
+        install -m 755 /usr/local/sbin/hx-ddos.new /usr/local/sbin/hx-ddos
+    fi
+    rm -f /usr/local/sbin/hx-ddos.new
+}
+
+# do_update <ask|yes|force> → 0 xong · 1 lỗi (đã tự lùi) · 2 huỷ
+do_update() {
+    local mode="${1:-ask}" cur lat url tmp src d g a since i ok=0 why="" pb pa p
     detect_arch
-    if [ -z "$ARCH_SUFFIX" ]; then
-        echo -e "${red}Không nhận ra kiến trúc CPU ($(uname -m)) — không cập nhật được.${plain}"
-        press_any_key; return
+    if [ -z "$ARCH_SUFFIX" ]; then echo -e "  ${red}✗ Không nhận ra kiến trúc CPU ($(uname -m)).${plain}"; return 1; fi
+    cur=$(cur_ver); lat=$(latest_ver)
+    echo -e "  Đang chạy ${B1}${cur:-?}${R0}   ·   Mới nhất ${B1}${lat:-không hỏi được GitHub}${R0}"
+    if [ -n "$lat" ] && [ "$cur" = "$lat" ] && [ "$mode" != force ]; then
+        if [ "$mode" = yes ]; then echo -e "  ${green}✓${plain} đã là bản mới nhất"; update_hyx_script; return 0; fi
+        read -rp "  Đã là bản mới nhất. Cài lại? [y/N]: " a
+        [[ "$a" =~ ^[yY]$ ]] || return 2
     fi
-
-    local tmp; tmp=$(mktemp -d /tmp/v2bx-up.XXXXXX) || { echo -e "${red}Lỗi thư mục tạm.${plain}"; press_any_key; return; }
-
-    if ! spin "Tải V2bX ${ARCH_SUFFIX}..." curl -fL --retry 3 --connect-timeout 15 -s \
-            -o "${tmp}/v2bx.zip" "${BASE_URL}/V2bX-${ARCH_SUFFIX}.zip"; then
-        echo -e "${red}Tải file thất bại!${plain}"; rm -rf "$tmp"; press_any_key; return
+    if [ "$mode" = ask ] && [ "$cur" != "$lat" ]; then
+        read -rp "  Nâng ${cur:-?} → ${lat:-bản mới nhất}? Node khởi động lại ~10 giây. [Y/n]: " a
+        [[ "$a" =~ ^[nN]$ ]] && return 2
     fi
+    if [ -n "$lat" ]; then url="https://github.com/${HX_REPO}/releases/download/${lat}/V2bX-${ARCH_SUFFIX}.zip"
+    else url="${BASE_URL}/V2bX-${ARCH_SUFFIX}.zip"; fi
 
-    if ! unzip -oq "${tmp}/v2bx.zip" -d "${tmp}/x"; then
-        echo -e "${red}Giải nén thất bại (file hỏng?)${plain}"; rm -rf "$tmp"; press_any_key; return
+    tmp=$(mktemp -d /tmp/v2bx-up.XXXXXX) || return 1
+    if ! spin "Tải V2bX ${lat:-mới nhất} · ${ARCH_SUFFIX}..." curl -fL --retry 3 --connect-timeout 15 -s -o "${tmp}/v.zip" "$url"; then
+        echo -e "  ${red}✗ Tải thất bại — node không bị đụng tới.${plain}"; rm -rf "$tmp"; return 1
     fi
-
-    local src; src=$(find "${tmp}/x" -maxdepth 2 -type f -name 'V2bX' | head -1)
-    if [ -z "$src" ]; then
-        echo -e "${red}Không tìm thấy binary trong gói tải về.${plain}"; rm -rf "$tmp"; press_any_key; return
+    if ! unzip_to "${tmp}/v.zip" "${tmp}/x" >/dev/null 2>&1; then
+        echo -e "  ${red}✗ Giải nén thất bại (file hỏng?) — node không bị đụng tới.${plain}"; rm -rf "$tmp"; return 1
     fi
-
+    src=$(find "${tmp}/x" -maxdepth 2 -type f -name 'V2bX' | head -1)
+    [ -n "$src" ] && chmod +x "$src"
     # Thử binary mới TRƯỚC khi dừng dịch vụ — tránh tải nhầm kiến trúc rồi chết node
-    chmod +x "$src"
-    if ! "$src" version &>/dev/null; then
-        echo -e "${red}Binary mới không chạy được trên máy này — huỷ cập nhật, Node vẫn chạy bình thường.${plain}"
-        rm -rf "$tmp"; press_any_key; return
+    if [ -z "$src" ] || ! "$src" version &>/dev/null; then
+        echo -e "  ${red}✗ Binary mới không chạy được trên máy này — huỷ, node vẫn chạy bình thường.${plain}"; rm -rf "$tmp"; return 1
+    fi
+    if [ -n "$lat" ] && ! "$src" version 2>/dev/null | grep -q -- "$lat"; then
+        echo -e "  ${red}✗ Gói tải về không phải ${lat} — huỷ.${plain}"; rm -rf "$tmp"; return 1
     fi
 
-    mkdir -p "$BIN_DIR"
-    [ -f "$BINARY" ] && cp -f "$BINARY" "${BINARY}.bak"
+    # Sao lưu: binary cũ giữ hẳn theo tên phiên bản, geo cũ để trong thư mục tạm (dùng khi lùi)
+    pb=$(node_ports)
+    mkdir -p "$BIN_DIR" "${tmp}/geo_old"
+    [ -f "$BINARY" ] && cp -pf "$BINARY" "${BIN_DIR}/V2bX.${cur:-old}.bak"
+    d=$(dirname "$src")
+    for g in geoip.dat geosite.dat geoip.db geosite.db; do [ -f "${CONF_DIR}/${g}" ] && cp -p "${CONF_DIR}/${g}" "${tmp}/geo_old/"; done
+
+    since=$(date '+%Y-%m-%d %H:%M:%S')
     svc stop &>/dev/null
     install -m 755 "$src" "$BINARY"
-
-    # Cập nhật luôn geo nếu gói có kèm
-    local d; d=$(dirname "$src")
     for g in geoip.dat geosite.dat geoip.db geosite.db; do
-        [ -f "${d}/${g}" ] && install -m 644 "${d}/${g}" "${CONF_DIR}/${g}"
+        [ -s "${d}/${g}" ] && install -m 644 "${d}/${g}" "${CONF_DIR}/${g}"
     done
-
     svc start
-    svc enable &>/dev/null   # mặc định luôn tự chạy cùng hệ thống
-    spin "Khởi động lại V2bX..." sleep 3
-    if svc_active; then
-        rm -f "${BINARY}.bak"
-        echo -e "  ${green}✓ Cập nhật xong · $(get_version | sed 's/ (.*//')${plain}"
-        # Kéo luôn script menu mới để có các mục vừa thêm (mss, log...)
-        if curl -fsL --connect-timeout 15 -o /usr/local/bin/hyx.new "${SCRIPT_URL}/v2bx.sh" \
-           && bash -n /usr/local/bin/hyx.new 2>/dev/null; then
-            mv -f /usr/local/bin/hyx.new /usr/local/bin/hyx
-            chmod +x /usr/local/bin/hyx
-            ln -sf /usr/local/bin/hyx /usr/local/bin/v2bx
-            ln -sf /usr/local/bin/hyx /usr/local/bin/hypex-x
-            echo -e "${green}Đã cập nhật lệnh hyx.${plain}"
-        else
-            rm -f /usr/local/bin/hyx.new
+    svc enable &>/dev/null
+
+    # Kiểm tối đa 40 s: dịch vụ chạy + đủ cổng như trước + log báo node đã lên, không panic
+    for (( i=0; i<20; i++ )); do
+        sleep 2
+        anim_ok && printf '\r  %s%s%s Kiểm tra node mới... %ds\033[K' "${GC[$(( i % NG ))]}" "${SPF:$(( i % 10 )):1}" "$R0" $(( i * 2 + 2 ))
+        if [ "$INIT_SYSTEM" = systemd ] && journalctl -u "$SERVICE" --since "$since" -o cat 2>/dev/null | grep -qiE 'panic|fatal error'; then
+            why="log có panic"; break
         fi
-    else
-        if [ -f "${BINARY}.bak" ]; then
-            mv -f "${BINARY}.bak" "$BINARY"
-            svc start
-            echo -e "${red}Bản mới không khởi động được — đã tự lùi về bản cũ.${plain}"
+        svc_active || { why="dịch vụ không chạy"; continue; }
+        pa=" $(node_ports) "; why=""
+        for p in $pb; do [[ "$pa" == *" $p "* ]] || why="thiếu cổng $p"; done
+        [ -n "$why" ] && continue
+        if [ "$INIT_SYSTEM" = systemd ] && ! journalctl -u "$SERVICE" --since "$since" -o cat 2>/dev/null \
+               | grep -qE 'khởi động xong|Added [0-9]+ new users'; then
+            why="node chưa báo đã lên"; continue
+        fi
+        ok=1; break
+    done
+    anim_ok && printf '\r\033[K'
+
+    if [ "$ok" = 1 ]; then
+        echo -e "  ${green}✓${plain} V2bX ${B1}$(cur_ver)${R0} chạy · cổng ${pb:-$(node_ports)} · bản cũ giữ ở ${dim}${BIN_DIR}/V2bX.${cur:-old}.bak${plain}"
+        update_hyx_script
+        rm -rf "$tmp"; return 0
+    fi
+    echo -e "  ${red}✗ Bản mới không ổn (${why:-quá thời gian}) — tự lùi về ${cur:-bản cũ}...${plain}"
+    [ "$INIT_SYSTEM" = systemd ] && journalctl -u "$SERVICE" --since "$since" -o cat --no-pager 2>/dev/null | grep -v accepted | tail -8 | sed 's/^/    /'
+    svc stop &>/dev/null
+    [ -f "${BIN_DIR}/V2bX.${cur:-old}.bak" ] && install -m 755 "${BIN_DIR}/V2bX.${cur:-old}.bak" "$BINARY"
+    for g in "${tmp}"/geo_old/*; do [ -f "$g" ] && install -m 644 "$g" "${CONF_DIR}/"; done
+    svc start; sleep 5
+    if svc_active; then echo -e "  ${yellow}↺${plain} đã về ${B1}$(cur_ver)${R0}, node chạy lại · cổng $(node_ports)"
+    else echo -e "  ${red}✗ Lùi xong nhưng dịch vụ vẫn không chạy — xem log: menu 8.${plain}"; fi
+    rm -rf "$tmp"; return 1
+}
+update_v2bx() { do_update ask; press_any_key; }
+
+# ══════════════════════════════════════════
+#   Chống DDoS (menu 25) — bọc lệnh hx-ddos: bật/tắt, IP được SSH
+# ══════════════════════════════════════════
+HXD=/usr/local/sbin/hx-ddos
+HXD_CONF=/etc/hx-ddos.conf
+ddos_is_on() { iptables -S HX-DDOS &>/dev/null; }
+ddos_conf_get() { ( PORT=""; ALLOW_SSH=""; [ -f "$HXD_CONF" ] && . "$HXD_CONF"; eval "printf '%s' \"\${$1}\"" ); }
+ddos_conf_set() {   # ddos_conf_set KEY "giá trị" — giữ nguyên các dòng khác của file
+    touch "$HXD_CONF"
+    if grep -q "^$1=" "$HXD_CONF"; then sed -i "s|^$1=.*|$1=\"$2\"|" "$HXD_CONF"
+    else echo "$1=\"$2\"" >> "$HXD_CONF"; fi
+}
+my_ssh_ip() {   # IP máy đang SSH vào (để không tự khoá mình)
+    local ip="${SSH_CLIENT%% *}"
+    [ -z "$ip" ] && ip=$(who -m 2>/dev/null | grep -oE '\(([0-9]{1,3}\.){3}[0-9]{1,3}\)' | tr -d '()')
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && echo "$ip"
+}
+ddos_get_script() {   # luôn lấy bản mới nhất (bản cũ không nhận nhiều cổng)
+    if curl -fsL --connect-timeout 15 -o "${HXD}.new" "${SCRIPT_URL}/hx-ddos.sh" && bash -n "${HXD}.new" 2>/dev/null; then
+        install -m 755 "${HXD}.new" "$HXD"
+    fi
+    rm -f "${HXD}.new"
+    [ -x "$HXD" ]
+}
+ddos_menu() {
+    local c ip ips port me n x new pk by
+    while true; do
+        clear; echo ""
+        port=$(ddos_conf_get PORT); ips=$(ddos_conf_get ALLOW_SSH); me=$(my_ssh_ip)
+        [ -z "$port" ] && port=$(node_ports)
+        [ -z "$ips" ] && ips="43.133.42.80 103.5.209.17 103.5.209.20"
+        BROW=0
+        hline '╭' '╮' 'CHỐNG DDOS'
+        if ddos_is_on; then
+            read -r pk by < <(iptables -L HX-DDOS -nvx 2>/dev/null | tail -1 | awk '{print $1, $2}')
+            brow "${green}● Đang bật${plain}   $(systemctl is-enabled hx-ddos.service &>/dev/null && echo "${dim}· tự bật khi khởi động${plain}")"
+            brow "${dim}Đã chặn${plain}  ${B1}${pk:-0}${R0} gói · $(( ${by:-0} / 1048576 )) MB rác ${dim}(từ lúc bật)${plain}"
         else
-            echo -e "${red}Cập nhật xong nhưng dịch vụ không chạy. Xem log: menu 8 → 5.${plain}"
+            brow "${yellow}○ Đang tắt${plain}   ${dim}máy nhận mọi kết nối${plain}"
+        fi
+        brow "${dim}Cổng node${plain}  ${port:-?}"
+        brow "${dim}SSH được phép từ$([ -f "$HXD_CONF" ] || echo ' (mặc định khi bật)'):${plain}"
+        n=0
+        for ip in $ips; do
+            n=$((n+1))
+            brow "   ${GC[$(( n % NG ))]}${n}.${R0} ${ip}$([ "$ip" = "$me" ] && echo "  ${green}← bạn đang ở đây${plain}")"
+        done
+        [ -n "$me" ] && [[ " $ips " != *" $me "* ]] && brow "   ${yellow}! IP bạn đang SSH (${me}) chưa có trong danh sách${plain}"
+        hline '╰' '╯'
+        echo ""
+        printf '  %s Bật / áp lại   %s Tắt   %s Thêm IP SSH   %s Xoá IP SSH   %s Xem luật   %s Về menu\n' \
+            "$(pill 1 0)" "$(pill 2 5)" "$(pill 3 10)" "$(pill 4 15)" "$(pill 5 20)" "$(pill 0 24)"
+        echo ""
+        cur_on; read -rp "  ${GC[0]}❯${GC[$(( NG / 2 ))]}❯${R0} " c
+        case "$c" in
+        1)
+            ddos_get_script || { toast_err "Không tải được hx-ddos"; sleep 1.5; continue; }
+            [ -n "$me" ] && [[ " $ips " != *" $me "* ]] && { ips="$ips $me"; echo -e "  ${green}+${plain} tự thêm IP của bạn ${me} để khỏi tự khoá"; }
+            ddos_conf_set PORT "$port"; ddos_conf_set ALLOW_SSH "$ips"
+            touch /root/hx-ddos.keep
+            "$HXD" on; "$HXD" boot
+            sleep 1.2 ;;
+        2)
+            read -rp "  Tắt chống DDoS? Máy sẽ nhận mọi kết nối. [y/N]: " x
+            if [[ "$x" =~ ^[yY]$ ]] && [ -x "$HXD" ]; then "$HXD" off; "$HXD" unboot; rm -f /root/hx-ddos.keep; sleep 1.2; fi ;;
+        3)
+            [ -n "$me" ] && echo -e "  ${dim}IP bạn đang SSH: ${me}${plain}"
+            read -rp "  IP được phép SSH thêm (IPv4): " new
+            if [[ "$new" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+                [[ " $ips " == *" $new "* ]] || ips="$ips $new"
+                ddos_conf_set ALLOW_SSH "$ips"; [ -n "$(ddos_conf_get PORT)" ] || ddos_conf_set PORT "$port"
+                ddos_is_on && { ddos_get_script; "$HXD" on >/dev/null; }
+                echo -e "  ${green}✓${plain} đã thêm ${new}"; sleep 1
+            else toast_err "IP không hợp lệ"; sleep 1; fi ;;
+        4)
+            read -rp "  Số thứ tự IP muốn xoá: " x
+            set -- $ips
+            if [[ "$x" =~ ^[0-9]+$ ]] && [ "$x" -ge 1 ] && [ "$x" -le $# ]; then
+                ip="${!x}"
+                if [ $# -le 1 ]; then toast_err "Phải giữ ít nhất 1 IP"; sleep 1.2; continue; fi
+                if [ "$ip" = "$me" ]; then
+                    read -rp "  ${ip} là IP bạn đang SSH — xoá là tự khoá mình khi đăng nhập lại. Vẫn xoá? [y/N]: " c
+                    [[ "$c" =~ ^[yY]$ ]] || continue
+                fi
+                new=""; for x in $ips; do [ "$x" = "$ip" ] || new="$new $x"; done
+                ddos_conf_set ALLOW_SSH "${new# }"
+                ddos_is_on && { ddos_get_script; "$HXD" on >/dev/null; }
+                echo -e "  ${green}✓${plain} đã xoá ${ip}"; sleep 1
+            else toast_err "Không có số đó"; sleep 1; fi ;;
+        5)
+            echo ""; iptables -L HX-DDOS -nv --line-numbers 2>/dev/null || echo "  (chưa bật)"
+            echo ""; read -rp "  Enter để quay lại " x ;;
+        0|"") show_menu; return ;;
+        *) toast_err "Không có mục này"; sleep 0.8 ;;
+        esac
+    done
+}
+
+# ══════════════════════════════════════════
+#   Kiểm tra sức khoẻ (menu 26 · lệnh: hyx check)
+# ══════════════════════════════════════════
+HC_OK=0; HC_WARN=0; HC_BAD=0
+hc() {   # hc ok|warn|bad|info "Nhãn" "chi tiết"
+    local m c l="$2"
+    case "$1" in
+        ok)   m='✓'; c="$green";  HC_OK=$((HC_OK+1)) ;;
+        warn) m='!'; c="$yellow"; HC_WARN=$((HC_WARN+1)) ;;
+        bad)  m='✗'; c="$red";    HC_BAD=$((HC_BAD+1)) ;;
+        *)    m='·'; c="$dim" ;;
+    esac
+    printf '  %b%s%b %s%*s %b\n' "$c" "$m" "$plain" "$l" $(( 15 - ${#l} )) '' "$3"
+}
+health_check() {
+    local x y z n lat cur ports est act rss lim av sw dk jd old ago ct ctm orp orpm cert days ld cores lim1h top ram
+    HC_OK=0; HC_WARN=0; HC_BAD=0
+    echo ""; hline '╭' '╮' 'KIỂM TRA SỨC KHOẺ NODE'; echo ""
+    # Dịch vụ
+    if svc_active; then
+        x=$(ps -o etimes= -C V2bX 2>/dev/null | head -1 | tr -d ' ')
+        n=$(systemctl show "$SERVICE" -p NRestarts --value 2>/dev/null)
+        hc ok "Dịch vụ" "đang chạy · lên $(fmt_dur "${x:-0}")$([ "${n:-0}" -gt 0 ] 2>/dev/null && echo " · đã tự khởi động lại ${n} lần")"
+    else hc bad "Dịch vụ" "V2bX KHÔNG chạy → menu 4 bật, menu 8 xem log"; fi
+    # Phiên bản
+    cur=$(cur_ver); lat=$(latest_ver)
+    if [ -z "$lat" ]; then hc info "Phiên bản" "${cur:-?} ${dim}(không hỏi được GitHub)${plain}"
+    elif [ "$cur" = "$lat" ]; then hc ok "Phiên bản" "${cur} · mới nhất"
+    else hc warn "Phiên bản" "${cur:-?} → đã có ${lat} · menu 2 để nâng"; fi
+    # Cổng + kết nối
+    ports=$(node_ports)
+    if [ -n "$ports" ]; then
+        est=0; for x in $ports; do est=$(( est + $(ss -Htn state established "( sport = :$x )" 2>/dev/null | wc -l) )); done
+        hc ok "Cổng node" "${ports} · ${est} kết nối khách"
+    else hc bad "Cổng node" "V2bX không nghe cổng nào (node chưa kéo được cấu hình từ panel?)"; fi
+    # Panel API
+    if [ "$INIT_SYSTEM" = systemd ]; then
+        x=$(journalctl -u "$SERVICE" --since -10min -o cat 2>/dev/null | grep -v accepted | grep -ciE 'error|timeout|deadline exceeded|status code: 5|status code: 4')
+        if [ "${x:-0}" -eq 0 ]; then hc ok "Panel API" "10 phút qua không lỗi"
+        else
+            y=$(journalctl -u "$SERVICE" --since -10min -o cat 2>/dev/null | grep -v accepted | grep -iE 'error|timeout|deadline exceeded|status code' | tail -1 | cut -c1-70)
+            hc warn "Panel API" "${x} lỗi/10 phút · ${dim}${y}${plain}"
+        fi
+        # Chặn thiết bị
+        lim1h=$(journalctl -u "$SERVICE" --since -1h --grep Limited -o cat 2>/dev/null | wc -l)
+        if [ "$lim1h" -eq 0 ]; then hc ok "Chặn thiết bị" "1 giờ qua 0 lượt"
+        else
+            top=$(journalctl -u "$SERVICE" --since -1h --grep Limited -o cat 2>/dev/null | grep -oE '\|[0-9a-f-]{36}' | sort | uniq -c | sort -rn | head -1 | awk '{print substr($2,2,8)"… "$1" lượt"}')
+            [ "$lim1h" -gt 500 ] && x=warn || x=info
+            hc "$x" "Chặn thiết bị" "${lim1h} lượt/1 giờ · nhiều nhất ${top} ${dim}(menu 18 xem khách)${plain}"
         fi
     fi
-    rm -rf "$tmp"
-    press_any_key
+    # RAM / OOM / tải
+    av=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)
+    sw=$(awk '/SwapTotal/{t=$2}/SwapFree/{f=$2}END{print int((t-f)/1024)"/"int(t/1024)}' /proc/meminfo)
+    rss=$(ps -o rss= -C V2bX 2>/dev/null | head -1 | tr -d ' '); rss=$(( ${rss:-0} / 1024 ))
+    lim=$(grep -ohE 'GOMEMLIMIT=[0-9]+MiB' /etc/systemd/system/V2bX.service.d/*.conf 2>/dev/null | head -1 | cut -d= -f2)
+    ram="còn ${av} MB · V2bX ${rss} MB${lim:+ / trần ${lim}} · swap ${sw} MB"
+    if   [ "$av" -lt 80 ];  then hc bad  "RAM" "$ram"
+    elif [ "$av" -lt 150 ]; then hc warn "RAM" "$ram"
+    else hc ok "RAM" "$ram"; fi
+    [ -z "$lim" ] && hc warn "Chống OOM" "chưa đặt GOMEMLIMIT → menu 21"
+    x=$(journalctl -k --since -24h -o cat 2>/dev/null | grep -c 'Killed process')
+    y=$(journalctl -k --since -24h -o cat 2>/dev/null | grep 'Killed process' | grep -c 'V2bX')
+    if [ "${y:-0}" -gt 0 ]; then hc bad "OOM 24 giờ" "V2bX bị kernel giết ${y} lần → khách đứt mạng; menu 21"
+    elif [ "${x:-0}" -gt 0 ]; then hc warn "OOM 24 giờ" "${x} tiến trình khác bị giết"
+    else hc ok "OOM 24 giờ" "không"; fi
+    ld=$(cut -d' ' -f1 /proc/loadavg); cores=$(nproc 2>/dev/null || echo 1)
+    if awk "BEGIN{exit !($ld > $cores * 1.5)}"; then hc warn "Tải CPU" "${ld} trên ${cores} nhân — quá tải"
+    else hc ok "Tải CPU" "${ld} trên ${cores} nhân"; fi
+    # Đĩa + log
+    dk=$(df -P / | awk 'NR==2{print $5}' | tr -d '%')
+    if   [ "$dk" -ge 90 ]; then hc bad  "Đĩa" "${dk}% — sắp đầy (log rsyslog/journal?)"
+    elif [ "$dk" -ge 80 ]; then hc warn "Đĩa" "${dk}%"
+    else hc ok "Đĩa" "${dk}% đã dùng"; fi
+    if [ "$INIT_SYSTEM" = systemd ]; then
+        jd=$(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[KMGT]' | head -1)
+        old=$(journalctl -u "$SERVICE" -o short-unix --no-pager -q 2>/dev/null | head -1 | cut -d. -f1)
+        if [[ "$old" =~ ^[0-9]+$ ]]; then
+            ago=$(( $(date +%s) - old ))
+            if [ "$ago" -lt 21600 ]; then hc warn "Log giữ được" "$(fmt_dur "$ago") (journal ${jd:-?}) — tra khách quá xa không được; nâng SystemMaxUse"
+            else hc ok "Log giữ được" "$(fmt_dur "$ago") · journal ${jd:-?}"; fi
+        fi
+        [ -f /etc/rsyslog.d/10-drop-v2bx.conf ] || { systemctl is-active -q rsyslog 2>/dev/null && hc warn "rsyslog" "đang chép log V2bX ra /var/log (dễ đầy đĩa)"; }
+    fi
+    # conntrack / orphan
+    if [ -r /proc/sys/net/netfilter/nf_conntrack_max ]; then
+        ct=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0); ctm=$(cat /proc/sys/net/netfilter/nf_conntrack_max)
+        x=$(journalctl -k --since -24h -o cat 2>/dev/null | grep -c 'table full')
+        if [ "$(( ct * 100 / ctm ))" -ge 90 ] || [ "${x:-0}" -gt 0 ]; then
+            hc bad "Conntrack" "${ct}/${ctm}$([ "${x:-0}" -gt 0 ] && echo " · ${x} lần 'table full' 24 giờ (rớt gói)")"
+        elif [ "$(( ct * 100 / ctm ))" -ge 70 ]; then hc warn "Conntrack" "${ct}/${ctm}"
+        else hc ok "Conntrack" "${ct}/${ctm}"; fi
+    fi
+    orp=$(awk '/^TCP:/{for(i=1;i<=NF;i++) if($i=="orphan") print $(i+1)}' /proc/net/sockstat)
+    orpm=$(cat /proc/sys/net/ipv4/tcp_max_orphans 2>/dev/null)
+    x=$(journalctl -k --since -24h -o cat 2>/dev/null | grep -c 'too many orphaned')
+    if [ "${x:-0}" -gt 0 ]; then hc warn "Socket mồ côi" "${orp}/${orpm} · ${x} lần 'too many orphaned' 24 giờ"
+    else hc ok "Socket mồ côi" "${orp:-0}/${orpm:-?}"; fi
+    # Cấu hình
+    x=$(grep -oE '"connIdle": *[0-9]+' "$CONFIG" 2>/dev/null | grep -oE '[0-9]+$')
+    if [ -z "$x" ]; then hc warn "connIdle" "chưa đặt (mặc định Xray cắt kết nối im sớm) → nên 300"
+    elif [ "$x" -lt 300 ]; then hc warn "connIdle" "${x} s — app chat/WeChat bị cắt, nên 300"
+    else hc ok "connIdle" "${x} s"; fi
+    iptables -t mangle -S INPUT 2>/dev/null | grep -q TCPMSS && hc ok "Ép MSS" "1400" || hc warn "Ép MSS" "chưa bật → menu 20 (web AWS/Xanh SM treo)"
+    # Cert (chỉ khi file có thật)
+    cert=$(grep -oE '"CertFile": *"[^"]+"' "$CONFIG" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+    if [ -n "$cert" ] && [ -f "$cert" ]; then
+        x=$(openssl x509 -enddate -noout -in "$cert" 2>/dev/null | cut -d= -f2)
+        if [ -n "$x" ]; then
+            days=$(( ( $(date -d "$x" +%s) - $(date +%s) ) / 86400 ))
+            y=$(openssl x509 -subject -noout -in "$cert" 2>/dev/null | sed 's/.*CN *= *//')
+            if   [ "$days" -lt 0 ];  then hc bad  "Chứng chỉ" "${y} hết hạn ${days#-} ngày trước"
+            elif [ "$days" -lt 15 ]; then hc warn "Chứng chỉ" "${y} còn ${days} ngày"
+            else hc ok "Chứng chỉ" "${y} còn ${days} ngày"; fi
+        fi
+    fi
+    # Giờ hệ thống (lệch giờ làm hỏng TLS/Reality)
+    x=$(timedatectl show -p NTPSynchronized --value 2>/dev/null)
+    [ "$x" = yes ] && hc ok "Đồng bộ giờ" "NTP ổn" || { [ -n "$x" ] && hc warn "Đồng bộ giờ" "chưa đồng bộ NTP — lệch giờ làm hỏng TLS/Reality"; }
+    ddos_is_on && hc info "Chống DDoS" "đang bật (menu 25)" || hc info "Chống DDoS" "tắt (menu 25)"
+    echo ""
+    printf '  %b%d ổn%b  ·  %b%d cảnh báo%b  ·  %b%d lỗi%b\n' "$green" "$HC_OK" "$plain" "$yellow" "$HC_WARN" "$plain" "$red" "$HC_BAD" "$plain"
+    [ "$HC_BAD" -gt 0 ] && return 2; [ "$HC_WARN" -gt 0 ] && return 1; return 0
 }
+check_health() { health_check; press_any_key; }
 
 uninstall_v2bx() {
     read -p "$(echo -e "${red}Bạn có chắc muốn gỡ cài đặt V2bX không? [y/n]: ${plain}")" confirm
@@ -1576,4 +1856,12 @@ bye() {
 }
 
 # ── Khởi chạy ────────────────────────────
+# Lệnh không cần menu (chạy hàng loạt qua SSH):
+#   hyx update [--force]   nâng V2bX lên bản mới nhất, hỏng thì tự lùi (mã thoát 0 ổn · 1 lỗi đã lùi)
+#   hyx check              kiểm tra sức khoẻ node (mã thoát 0 ổn · 1 có cảnh báo · 2 có lỗi)
+case "${1:-}" in
+    update|-u) if [ "${2:-}" = --force ]; then do_update force; else do_update yes; fi; exit $? ;;
+    check|health) health_check; exit $? ;;
+    help|-h|--help) echo "hyx            mở menu"; echo "hyx update     nâng V2bX (tự lùi nếu hỏng)  ·  hyx update --force"; echo "hyx check      kiểm tra sức khoẻ node"; exit 0 ;;
+esac
 show_menu
