@@ -1274,7 +1274,11 @@ if curl -fsL --retry 3 --connect-timeout 15 -o /usr/local/bin/hyx "${SCRIPT_URL}
     chmod +x /usr/local/bin/hyx
     ln -sf /usr/local/bin/hyx /usr/local/bin/v2bx
     ln -sf /usr/local/bin/hyx /usr/local/bin/hypex-x
-    echo -e "\n  Quản lý: gõ ${bold}$(gtext hyx)${plain}   ${dim}(7 trạng thái · 8 log)${plain}\n"
+    # Tự cập nhật V2bX 03:30 giờ VN (chỉ bản phát hành ≥ 24 giờ, hỏng thì tự lùi) — tắt: HXautoupdate=0 hoặc hyx → 27
+    if [ "${HXautoupdate:-1}" = 1 ] && [ "${INIT_SYSTEM}" = "systemd" ]; then
+        HYX_NOANIM=1 /usr/local/bin/hyx autoupdate on >/dev/null 2>&1 && ok "Tự cập nhật V2bX: bật (03:30 giờ VN · hyx → 27 để tắt)"
+    fi
+    echo -e "\n  Quản lý: gõ ${bold}$(gtext hyx)${plain}   ${dim}(7 trạng thái · 8 log · 26 sức khoẻ)${plain}\n"
 else
     warn "Không tải được script quản lý (không ảnh hưởng Node). Chạy lại: curl -fsL ${SCRIPT_URL}/v2bx.sh -o /usr/local/bin/hyx"
 fi

@@ -464,3 +464,27 @@ node 30 trên panel thay vì node 33.
 - **rsyslog** không chép log V2bX (`/etc/rsyslog.d/10-drop-v2bx.conf` + logrotate `maxsize 200M`) — 26/09 `.17` đầy đĩa.
 - **conntrack/orphan** (`/etc/sysctl.d/92-v2bx-conntrack.conf`): `nf_conntrack_max` ≥ 65536, established 7200 s,
   `tcp_orphan_retries=2`, `tcp_max_orphans` ≥ 16384 — máy Huawei 800 MB mặc định 6656 bị "table full".
+
+## 05/10/2026 chiều — v1.0.12: báo phiên bản cho panel, `hyx update` tự lùi, Chống DDoS, Sức khoẻ, CI đủ geo
+
+- **V2bX báo phiên bản**: `api/panel/panel.go` gửi `User-Agent: V2bX/<bản>` + `X-V2bX-Version` mỗi request (`panel.Version`
+  gán trong `cmd/server.go`). Panel `NodeSourceStats::noteVersion` ghi Redis `node_src_ver:{node}:{ip}` (bản cũ = `old`),
+  trang Node hiện huy hiệu: xanh = mới nhất, vàng = có bản mới hơn, xám = bản cũ (< v1.0.12). Bản mới nhất panel tự hỏi
+  GitHub (`latestVersion()`, nhớ 6 giờ).
+- **`hyx update [--force]`** (menu 2): so bản đang chạy với `releases/latest`, tải đúng tag, thử binary trước khi dừng
+  dịch vụ, thay xong phải trong 40 s: dịch vụ chạy + **đủ các cổng như trước** + log `khởi động xong`/`Added N new users`
+  + không `panic` — không thì tự lùi binary + geo. Bản cũ giữ `V2bX-bin/V2bX.<bản>.bak`. Mã thoát 0/1/2 (ổn/lỗi đã lùi/huỷ).
+  `update-v2bx-release.sh` giờ chỉ tải hyx mới rồi gọi lệnh này (`FORCE=1` để cài lại cùng bản).
+- **`hyx check`** (menu 26): ~18 mục (dịch vụ, phiên bản, cổng, lỗi API panel 10 phút, Limited 1 giờ, RAM/GOMEMLIMIT,
+  OOM 24 giờ, tải, đĩa, thời gian giữ log, conntrack + "table full", orphan, connIdle, MSS, cert, NTP). Mã thoát 0/1/2.
+- **Menu 25 Chống DDoS**: bật/áp lại, tắt (gỡ cả tự bật khi khởi động), thêm/xoá IP được SSH; luôn tự thêm IP phiên SSH
+  đang dùng, hỏi lại khi xoá chính IP đó. `hx-ddos.sh` nhận nhiều cổng (`PORT="80 443"`) + lệnh `unboot`.
+- **CI release** (`.github/workflows/release.yml`): tải đủ 4 geo (Loyalsoldier .dat + SagerNet sing-geoip/sing-geosite .db),
+  `go test ./limiter/... ./api/...` + chạy thử binary linux/amd64, `overwrite: true`. Từ v1.0.12 **không build tay nữa**:
+  tạo release (pre-release trước để `latest` chưa trỏ sang khi CI chưa up xong) → CI build → bỏ cờ pre-release.
+- Node `.17`/`.20`: journald `SystemMaxUse=3G` (trước 300M — `.20` chỉ giữ ~1 h 40).
+- **Tự cập nhật** (menu 27 · `hyx autoupdate on|off|status`; bộ cài bật sẵn, tắt bằng `HXautoupdate=0`): timer
+  `hyx-autoupdate.timer` 20:30 UTC (03:30 VN) + lệch ngẫu nhiên ≤ 30 phút → `hyx update --auto`. **Chỉ cài bản đã phát
+  hành ≥ 24 giờ** (`HYX_AUTO_MIN_AGE`), không có bản mới thì không khởi động lại gì; lỗi thì tự lùi như menu 2.
+  Lệnh `hyx` (script) được kéo từ `main` mỗi lần chạy — đẩy `main` là ≤ 1 ngày mọi máy có menu mới.
+  Kết quả: `journalctl -u hyx-autoupdate.service`.

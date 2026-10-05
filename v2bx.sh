@@ -615,16 +615,16 @@ declare -A LABEL=(
     [11]='BBR' [12]='Mở cổng' [13]='Chặn speedtest' [20]='Ép MSS 1400'
     [21]='Chống OOM' [22]='Tối ưu mạng' [23]='Dọn KN chết' [24]='Chuyển tiếp VN'
     [19]='Cert LE' [16]='Cert tự ký' [15]='Khóa X25519' [17]='Cập nhật geo'
-    [25]='Chống DDoS' [26]='Sức khoẻ'
+    [25]='Chống DDoS' [26]='Sức khoẻ' [27]='Tự cập nhật'
     [0]='Thoát'
 )
 MENU_GROUPS=(
-    'DỊCH VỤ|1 2 3 4 5 6 9 10'
+    'DỊCH VỤ|1 2 27 3 4 5 6 9 10'
     'THEO DÕI|7 26 8 14 18'
     'MẠNG & HIỆU NĂNG|11 12 13 20 21 22 23 24 25'
     'CHỨNG CHỈ & DỮ LIỆU|19 16 15 17'
 )
-MENU_TOTAL=27
+MENU_TOTAL=28
 # Nhãn số: nền gradient, chữ đen đậm
 pill() { printf '%s%s%s%3s %s' "${GB[$(( $2 * NG / MENU_TOTAL % NG ))]}" "${B1}" "${ESC}[38;5;16m" "$1" "$R0"; }
 menu_item() {   # menu_item <số> <thứ tự> → "▌ 1  Cài đặt      " đúng bề ngang ô
@@ -712,6 +712,7 @@ handle_choice() {
     24) setup_relay_vn ;;
     25) ddos_menu ;;
     26) check_health ;;
+    27) autoupdate_menu ;;
     0)  bye ;;
     *)  toast_err "Không có mục này"; sleep 0.8; show_menu ;;
     esac
@@ -729,10 +730,17 @@ install_v2bx() {
 # ══════════════════════════════════════════
 HX_REPO="${V2BX_REPO:-Tubetna/hypex-x}"
 cur_ver()    { "$BINARY" version 2>/dev/null | grep -o 'v[0-9][0-9.]*' | head -1; }
-latest_ver() {
-    curl -fsSL --connect-timeout 8 -m 15 "https://api.github.com/repos/${HX_REPO}/releases/latest" 2>/dev/null \
-        | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/'
+# latest_info → LAT_TAG (vd v1.0.12) + LAT_AGE (số giây kể từ lúc phát hành; -1 nếu không rõ)
+latest_info() {
+    local j pub
+    LAT_TAG=""; LAT_AGE=-1
+    j=$(curl -fsSL --connect-timeout 8 -m 15 "https://api.github.com/repos/${HX_REPO}/releases/latest" 2>/dev/null) || return 1
+    LAT_TAG=$(grep -o '"tag_name": *"[^"]*"' <<<"$j" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+    pub=$(grep -o '"published_at": *"[^"]*"' <<<"$j" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+    pub=$(date -d "$pub" +%s 2>/dev/null) && LAT_AGE=$(( $(date +%s) - pub ))
+    [ -n "$LAT_TAG" ]
 }
+latest_ver() { latest_info; echo "$LAT_TAG"; }
 # Cổng TCP V2bX đang nghe (để so trước/sau khi nâng)
 node_ports() {   # bỏ cổng chỉ nghe nội bộ (vd pprof 127.0.0.1:6060)
     ss -Hltnp 2>/dev/null | grep '"V2bX"' | awk '{print $4}' | grep -vE '^(127\.|\[::1\]|::1)' \
@@ -759,13 +767,24 @@ update_hyx_script() {
     rm -f /usr/local/sbin/hx-ddos.new
 }
 
-# do_update <ask|yes|force> → 0 xong · 1 lỗi (đã tự lùi) · 2 huỷ
+# do_update <ask|yes|auto|force> → 0 xong · 1 lỗi (đã tự lùi) · 2 huỷ
+#   auto = chạy theo lịch: như yes, nhưng chỉ cài bản đã phát hành ≥ AUTO_MIN_AGE giây (mặc định 24 giờ)
+#   — bản lỗi không lan ra mọi máy ngay, còn thời gian thử tay trên 1 máy.
+AUTO_MIN_AGE="${HYX_AUTO_MIN_AGE:-86400}"
 do_update() {
     local mode="${1:-ask}" cur lat url tmp src d g a since i ok=0 why="" pb pa p
     detect_arch
     if [ -z "$ARCH_SUFFIX" ]; then echo -e "  ${red}✗ Không nhận ra kiến trúc CPU ($(uname -m)).${plain}"; return 1; fi
-    cur=$(cur_ver); lat=$(latest_ver)
+    cur=$(cur_ver); latest_info; lat="$LAT_TAG"
     echo -e "  Đang chạy ${B1}${cur:-?}${R0}   ·   Mới nhất ${B1}${lat:-không hỏi được GitHub}${R0}"
+    if [ "$mode" = auto ]; then
+        [ -z "$lat" ] && { echo "  không hỏi được GitHub — để lần sau"; return 0; }
+        if [ "$cur" != "$lat" ] && [ "$LAT_AGE" -ge 0 ] && [ "$LAT_AGE" -lt "$AUTO_MIN_AGE" ]; then
+            echo "  ${lat} mới phát hành $(fmt_dur "$LAT_AGE") trước — chờ đủ $(( AUTO_MIN_AGE / 3600 )) giờ mới tự cài"
+            update_hyx_script; return 0
+        fi
+        mode=yes
+    fi
     if [ -n "$lat" ] && [ "$cur" = "$lat" ] && [ "$mode" != force ]; then
         if [ "$mode" = yes ]; then echo -e "  ${green}✓${plain} đã là bản mới nhất"; update_hyx_script; return 0; fi
         read -rp "  Đã là bản mới nhất. Cài lại? [y/N]: " a
@@ -846,6 +865,66 @@ do_update() {
     rm -rf "$tmp"; return 1
 }
 update_v2bx() { do_update ask; press_any_key; }
+
+# ── Tự cập nhật theo lịch (menu 27 · lệnh: hyx autoupdate on|off|status) ──
+# 20:30 UTC = 03:30 VN = 04:30 TQ (vắng khách), mỗi máy lệch ngẫu nhiên ≤ 30 phút để 2 máy cùng node
+# không khởi động lại một lúc. Không có bản mới thì không đụng gì; có thì như menu 2 (kiểm tra + tự lùi).
+AU=/etc/systemd/system/hyx-autoupdate
+autoupdate_is_on() { systemctl is-enabled -q hyx-autoupdate.timer 2>/dev/null; }
+autoupdate_on() {
+    [ "$INIT_SYSTEM" = systemd ] || { echo "  Chỉ hỗ trợ máy dùng systemd."; return 1; }
+    cat > "${AU}.service" <<'UNIT'
+[Unit]
+Description=hypex-x: tự cập nhật V2bX (chỉ bản đã phát hành >= 24 giờ; hỏng thì tự lùi)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HYX_NOANIM=1
+ExecStart=/usr/local/bin/hyx update --auto
+UNIT
+    cat > "${AU}.timer" <<'UNIT'
+[Unit]
+Description=hypex-x: lịch tự cập nhật V2bX (03:30 giờ VN, lệch ngẫu nhiên <= 30 phút)
+
+[Timer]
+OnCalendar=*-*-* 20:30:00 UTC
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+    systemctl daemon-reload && systemctl enable --now hyx-autoupdate.timer >/dev/null 2>&1
+    autoupdate_is_on && echo -e "  ${green}✓${plain} tự cập nhật: BẬT · lần tới $(autoupdate_next)"
+}
+autoupdate_off() {
+    systemctl disable --now hyx-autoupdate.timer >/dev/null 2>&1
+    echo -e "  ${yellow}○${plain} tự cập nhật: TẮT (cập nhật tay bằng menu 2)"
+}
+autoupdate_next() {
+    local t; t=$(systemctl show hyx-autoupdate.timer -p NextElapseUSecRealtime --value 2>/dev/null)
+    [ -n "$t" ] && [ "$t" != n/a ] && TZ=Asia/Ho_Chi_Minh date -d "$t" '+%H:%M %d/%m (giờ VN)' 2>/dev/null || echo "?"
+}
+autoupdate_last() {   # dòng kết quả của lần chạy gần nhất
+    journalctl -u hyx-autoupdate.service -n 30 -o cat --no-pager 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' | grep -E '✓|✗|↺|chờ đủ|không hỏi' | tail -1 | sed 's/^ *//'
+}
+autoupdate_status() {
+    if autoupdate_is_on; then echo -e "  ${green}●${plain} tự cập nhật: BẬT · lần tới $(autoupdate_next)"
+    else echo -e "  ${yellow}○${plain} tự cập nhật: TẮT"; fi
+    local l; l=$(autoupdate_last); [ -n "$l" ] && echo -e "  ${dim}lần gần nhất: ${l}${plain}"
+}
+autoupdate_menu() {
+    local x
+    autoupdate_status
+    echo -e "  ${dim}Chạy 03:30 sáng giờ VN, chỉ cài bản đã phát hành ≥ 24 giờ; node lỗi thì tự lùi bản cũ.${plain}"
+    echo ""
+    if autoupdate_is_on; then read -rp "  Tắt tự cập nhật? [y/N]: " x; [[ "$x" =~ ^[yY]$ ]] && autoupdate_off
+    else read -rp "  Bật tự cập nhật? [Y/n]: " x; [[ "$x" =~ ^[nN]$ ]] || autoupdate_on; fi
+    press_any_key
+}
 
 # ══════════════════════════════════════════
 #   Chống DDoS (menu 25) — bọc lệnh hx-ddos: bật/tắt, IP được SSH
@@ -1066,6 +1145,8 @@ health_check() {
     x=$(timedatectl show -p NTPSynchronized --value 2>/dev/null)
     [ "$x" = yes ] && hc ok "Đồng bộ giờ" "NTP ổn" || { [ -n "$x" ] && hc warn "Đồng bộ giờ" "chưa đồng bộ NTP — lệch giờ làm hỏng TLS/Reality"; }
     ddos_is_on && hc info "Chống DDoS" "đang bật (menu 25)" || hc info "Chống DDoS" "tắt (menu 25)"
+    if autoupdate_is_on; then hc ok "Tự cập nhật" "bật · lần tới $(autoupdate_next)"
+    else hc info "Tự cập nhật" "tắt (menu 27)"; fi
     echo ""
     printf '  %b%d ổn%b  ·  %b%d cảnh báo%b  ·  %b%d lỗi%b\n' "$green" "$HC_OK" "$plain" "$yellow" "$HC_WARN" "$plain" "$red" "$HC_BAD" "$plain"
     [ "$HC_BAD" -gt 0 ] && return 2; [ "$HC_WARN" -gt 0 ] && return 1; return 0
@@ -1860,8 +1941,9 @@ bye() {
 #   hyx update [--force]   nâng V2bX lên bản mới nhất, hỏng thì tự lùi (mã thoát 0 ổn · 1 lỗi đã lùi)
 #   hyx check              kiểm tra sức khoẻ node (mã thoát 0 ổn · 1 có cảnh báo · 2 có lỗi)
 case "${1:-}" in
-    update|-u) if [ "${2:-}" = --force ]; then do_update force; else do_update yes; fi; exit $? ;;
+    update|-u) case "${2:-}" in --force) do_update force ;; --auto) do_update auto ;; *) do_update yes ;; esac; exit $? ;;
+    autoupdate) case "${2:-status}" in on) autoupdate_on ;; off) autoupdate_off ;; *) autoupdate_status ;; esac; exit $? ;;
     check|health) health_check; exit $? ;;
-    help|-h|--help) echo "hyx            mở menu"; echo "hyx update     nâng V2bX (tự lùi nếu hỏng)  ·  hyx update --force"; echo "hyx check      kiểm tra sức khoẻ node"; exit 0 ;;
+    help|-h|--help) echo "hyx            mở menu"; echo "hyx update     nâng V2bX (tự lùi nếu hỏng)  ·  hyx update --force"; echo "hyx autoupdate on|off|status   tự cập nhật 03:30 VN"; echo "hyx check      kiểm tra sức khoẻ node"; exit 0 ;;
 esac
 show_menu
