@@ -913,7 +913,7 @@ autoupdate_next() {   # đọc dạng epoch: `date` bản Rust (Ubuntu 26.04) đ
 }
 autoupdate_last() {   # dòng kết quả của lần chạy gần nhất
     journalctl -u hyx-autoupdate.service -n 30 -o cat --no-pager 2>/dev/null \
-        | sed 's/\x1b\[[0-9;]*m//g' | grep -E '✓|✗|↺|chờ đủ|không hỏi' | tail -1 | sed 's/^ *//'
+        | sed 's/\x1b\[[0-9;]*m//g' | grep -E '✓|✗|↺|chờ đủ|không hỏi|không đọc được' | tail -1 | sed 's/^ *//'
 }
 autoupdate_status() {
     if autoupdate_is_on; then echo -e "  ${green}●${plain} tự cập nhật: BẬT · lần tới $(autoupdate_next)"
