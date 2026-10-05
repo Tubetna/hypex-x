@@ -2,6 +2,7 @@ package limiter
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"regexp"
 	"strings"
@@ -32,7 +33,7 @@ type Limiter struct {
 	SpeedLimiter  *sync.Map      // key: TagUUID, value: *ratelimit.Bucket
 	AliveList     map[int]int    // Key: Uid, value: alive_ip
 	// AliveNets: DẢI mạng panel đang ghi nhận cho mỗi user (mọi node gộp lại),
-	// đã gom theo /24 (IPv4) · /64 (IPv6). IP mới thuộc một dải đã biết là máy
+	// đã gom theo /21 (IPv4) · /64 + đuôi 64 bit (IPv6). IP mới thuộc một dải đã biết là máy
 	// cũ vừa bị CGNAT đổi IP, không phải thiết bị mới → không chặn.
 	AliveNets map[int]map[string]struct{} // Key: Uid, value: set dải
 	// AliveFamily: số thiết bị panel đếm riêng từng họ [IPv4, IPv6] (xem
@@ -96,7 +97,11 @@ func (l *Limiter) SetAlive(alive *panel.AliveMap) {
 		// hơn đếm theo dải — panel cũ có thể đã đếm thô, đừng nới quá tay).
 		var cnt [2]int
 		for _, ip := range list {
-			set[subnetKey(strings.TrimPrefix(ip, "::ffff:"))] = struct{}{}
+			ip = strings.TrimPrefix(ip, "::ffff:")
+			set[subnetKey(ip)] = struct{}{}
+			if k := iidKey(ip); k != "" {
+				set[k] = struct{}{}
+			}
 			cnt[familyOf(ip)]++
 		}
 		nets[uid] = set
@@ -137,8 +142,14 @@ func (l *Limiter) overDeviceLimit(uid, deviceLimit int, ip string) bool {
 		return false
 	}
 	if set, ok := l.AliveNets[uid]; ok {
-		if _, known := set[subnetKey(strings.TrimPrefix(ip, "::ffff:"))]; known {
+		ip = strings.TrimPrefix(ip, "::ffff:")
+		if _, known := set[subnetKey(ip)]; known {
 			return false // IP mới nhưng cùng dải máy đã đếm → CGNAT đổi IP, tha
+		}
+		if k := iidKey(ip); k != "" {
+			if _, known := set[k]; known {
+				return false // IPv6 cùng 64 bit đuôi → cùng máy, nhà mạng chỉ đổi dải /64
+			}
 		}
 	}
 	// (4) Đếm theo TỪNG HỌ địa chỉ: chỉ chặn khi họ của IP này (IPv4 hoặc IPv6)
@@ -151,18 +162,45 @@ func (l *Limiter) overDeviceLimit(uid, deviceLimit int, ip string) bool {
 	return true
 }
 
-// subnetKey gom IP về dải để so khớp: /24 cho IPv4, /64 cho IPv6. Nhà mạng di
+// subnetKey gom IP về dải để so khớp: /21 cho IPv4, /64 cho IPv6. Nhà mạng di
 // động đổi IP công cộng liên tục trong một dải; coi cả dải là một thiết bị thì
-// một máy không bị đếm thành nhiều. IP không hợp lệ trả về nguyên văn.
+// một máy không bị đếm thành nhiều. /21 vì CGNAT nhảy qua nhiều /24 sát nhau
+// (Viettel 116.105.152–154.x, China Mobile 220.205.248–253.x). Phải khớp
+// DeviceStateService::IPV4_PREFIX của panel. IP không hợp lệ trả về nguyên văn.
 func subnetKey(ip string) string {
 	p := net.ParseIP(ip)
 	if p == nil {
 		return ip
 	}
 	if v4 := p.To4(); v4 != nil {
-		return net.IP(v4.Mask(net.CIDRMask(24, 32))).String() + "/24"
+		return net.IP(v4.Mask(net.CIDRMask(21, 32))).String() + "/21"
 	}
 	return p.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
+// iidKey: 64 bit đuôi của IPv6 (định danh giao diện). Nhà mạng (Viettel) đổi
+// dải /64 của điện thoại liên tục nhưng máy giữ nguyên đuôi → cùng đuôi = cùng
+// máy. Hai máy khác nhau gần như không trùng 64 bit đuôi. IPv4 / đuôi toàn số 0
+// (địa chỉ router, ::) trả "" — không dùng để gộp.
+func iidKey(ip string) string {
+	p := net.ParseIP(ip)
+	if p == nil || p.To4() != nil {
+		return ""
+	}
+	tail := p.To16()[8:]
+	// Đuôi kiểu ::1, ::5, ::abcd (6 byte đầu toàn 0) là địa chỉ đặt tay của
+	// router/máy chủ — nhiều nơi trùng nhau → không dùng để gộp.
+	low := true
+	for _, b := range tail[:6] {
+		if b != 0 {
+			low = false
+			break
+		}
+	}
+	if low {
+		return ""
+	}
+	return fmt.Sprintf("iid:%x", []byte(tail))
 }
 
 func GetLimiter(tag string) (info *Limiter, err error) {

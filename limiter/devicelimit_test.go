@@ -142,9 +142,12 @@ func TestFamilyOf(t *testing.T) {
 
 func TestSubnetKey(t *testing.T) {
 	cases := map[string]string{
-		"222.188.99.85":  "222.188.99.0/24",
-		"222.188.99.200": "222.188.99.0/24",
-		"1.2.3.4":        "1.2.3.0/24",
+		"222.188.99.85":  "222.188.96.0/21",
+		"222.188.99.200": "222.188.96.0/21",
+		"116.105.152.6":  "116.105.152.0/21",
+		"116.105.154.71": "116.105.152.0/21",
+		"220.205.253.1":  "220.205.248.0/21",
+		"1.2.3.4":        "1.2.0.0/21",
 	}
 	for ip, want := range cases {
 		if got := subnetKey(ip); got != want {
@@ -166,6 +169,58 @@ func TestIsProbeHost(t *testing.T) {
 	for _, h := range []string{"fonts.gstatic.com", "www.google.com", "8.8.8.8", "graph.facebook.com"} {
 		if IsProbeHost(h) {
 			t.Errorf("%s không phải probe", h)
+		}
+	}
+}
+
+// Ca thật 05/10 (nadnav3333@, 37366, gói 1 máy): Viettel đổi dải /64 của điện
+// thoại nhưng giữ nguyên đuôi → cùng máy, không được chặn.
+func TestIPv6SameIIDNewPrefixAllowed(t *testing.T) {
+	l := newTestLimiter1(&panel.AliveMap{
+		Alive:  map[int]int{9: 1},
+		IPs:    map[int][]string{9: {"2401:d800:170:20c9:4c32:b1ff:fecc:52eb"}},
+		Family: map[int][2]int{9: {0, 1}},
+	})
+	if _, reject := l.CheckLimit("node|u9", "2401:d800:73f1:731f:4c32:b1ff:fecc:52eb", true, true); reject {
+		t.Fatal("cùng đuôi IPv6, chỉ khác dải /64, bị chặn")
+	}
+	// máy khác (đuôi khác, dải khác) vẫn phải chặn
+	if _, reject := l.CheckLimit("node|u9", "2401:d800:f0e:7136:1111:2222:3333:4444", true, true); !reject {
+		t.Fatal("IPv6 máy khác (đuôi khác) khi đã đủ mà không bị chặn")
+	}
+	// đuôi đặt tay ::1 không được gộp
+	l2 := newTestLimiter1(&panel.AliveMap{
+		Alive:  map[int]int{9: 1},
+		IPs:    map[int][]string{9: {"2001:db8:1:2::1"}},
+		Family: map[int][2]int{9: {0, 1}},
+	})
+	if _, reject := l2.CheckLimit("node|u9", "2001:db8:9:9::1", true, true); !reject {
+		t.Fatal("đuôi ::1 ở dải khác bị gộp nhầm")
+	}
+}
+
+// Ca thật 05/10 (q72090330@, 12073): CGNAT Viettel nhảy 116.105.152–154.x.
+func TestCgnatAdjacent24Allowed(t *testing.T) {
+	l := newTestLimiter(&panel.AliveMap{
+		Alive:  map[int]int{7: 2},
+		IPs:    map[int][]string{7: {"116.105.154.71", "27.71.121.212"}},
+		Family: map[int][2]int{7: {2, 0}},
+	})
+	if _, reject := l.CheckLimit("node|u7", "116.105.152.6", true, true); reject {
+		t.Fatal("IP CGNAT /24 kề bên (cùng /21) bị chặn")
+	}
+	if _, reject := l.CheckLimit("node|u7", "171.241.16.125", true, true); !reject {
+		t.Fatal("máy thứ ba dải khác hẳn mà không bị chặn")
+	}
+}
+
+func TestIIDKey(t *testing.T) {
+	if iidKey("2401:d800:170:20c9:4c32:b1ff:fecc:52eb") != iidKey("2401:d800:f0e:7136:4c32:b1ff:fecc:52eb") {
+		t.Error("cùng đuôi phải cùng khoá")
+	}
+	for _, ip := range []string{"1.2.3.4", "::ffff:1.2.3.4", "2001:db8::1", "2001:db8::abcd", "bad"} {
+		if k := iidKey(ip); k != "" {
+			t.Errorf("iidKey(%s)=%q, muốn rỗng", ip, k)
 		}
 	}
 }
