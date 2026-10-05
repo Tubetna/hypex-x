@@ -1061,10 +1061,10 @@ health_check() {
     else hc bad "Cổng node" "V2bX không nghe cổng nào (node chưa kéo được cấu hình từ panel?)"; fi
     # Panel API
     if [ "$INIT_SYSTEM" = systemd ]; then
-        x=$(journalctl -u "$SERVICE" --since -10min -o cat 2>/dev/null | grep -v accepted | grep -ciE 'error|timeout|deadline exceeded|status code: 5|status code: 4')
+        x=$(journalctl -u "$SERVICE" --since -10min -o cat 2>/dev/null | grep -v accepted | grep -v -i deprecated             | grep -ciE 'level=(error|fatal)|deadline exceeded|i/o timeout|status code: [45][0-9][0-9]')
         if [ "${x:-0}" -eq 0 ]; then hc ok "Panel API" "10 phút qua không lỗi"
         else
-            y=$(journalctl -u "$SERVICE" --since -10min -o cat 2>/dev/null | grep -v accepted | grep -iE 'error|timeout|deadline exceeded|status code' | tail -1 | cut -c1-70)
+            y=$(journalctl -u "$SERVICE" --since -10min -o cat 2>/dev/null | grep -v accepted | grep -v -i deprecated                 | grep -iE 'level=(error|fatal)|deadline exceeded|i/o timeout|status code: [45][0-9][0-9]' | tail -1 | cut -c1-70)
             hc warn "Panel API" "${x} lỗi/10 phút · ${dim}${y}${plain}"
         fi
         # Chặn thiết bị
