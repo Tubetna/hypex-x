@@ -733,6 +733,28 @@ else
     V6_UDP_RULE='    { "type": "field", "network": "udp", "ip": ["::/0"], "outboundTag": "block" },
 '
 fi
+# QUIC (UDP 443): HXquic=block (mặc định) | allow.
+#   block — node nối thẳng (Reality/China): ép app lùi về TCP, nhưng VẪN cho WeChat/Tencent
+#           + IP Trung Quốc đi QUIC (05/10/2026: chặn im làm WeChat treo ảnh/voice).
+#   allow — node sau CDN tính tiền theo request (CloudFront): chặn QUIC thì app thử lại liên
+#           tục, mỗi lần = 1 request (04/10/2026: bỏ chặn trên .17 giảm 27 % kết nối).
+QUIC_MODE="${HXquic:-block}"
+if [ "${QUIC_MODE}" = "allow" ]; then
+    QUIC_RULES=''
+else
+    QUIC_RULES='    { "type": "field", "network": "udp", "port": "443", "_tag": "hx-wechat-quic",
+      "domain": ["domain:weixin.qq.com", "domain:wechat.com", "domain:wx.qq.com", "domain:qpic.cn",
+                 "domain:qlogo.cn", "domain:tc.qq.com", "domain:wechatpay.cn", "domain:weixinbridge.com",
+                 "domain:servicewechat.com", "domain:wxs.qq.com"],
+      "outboundTag": "direct" },
+    { "type": "field", "network": "udp", "port": "443", "_tag": "hx-wechat-quic",
+      "ip": ["43.128.0.0/10", "101.32.0.0/15", "129.226.0.0/16", "150.109.0.0/16", "162.62.0.0/16",
+             "170.106.0.0/16", "49.51.0.0/16", "119.28.0.0/16", "203.205.128.0/17", "143.92.64.0/18",
+             "geoip:cn"],
+      "outboundTag": "direct" },
+    { "type": "field", "network": "udp", "port": "443", "outboundTag": "block" }
+'
+fi
 if [ ! -f "${CONF_DIR}/route.json" ]; then
 cat > "${CONF_DIR}/route.json" << JSONEOF
 {
@@ -748,9 +770,8 @@ ${V6_UDP_RULE}    {
         "2606:4700:4700::1111", "2606:4700:4700::1001"
       ],
       "outboundTag": "direct"
-    },
-    { "type": "field", "network": "udp", "port": "443", "outboundTag": "block" }
-  ]
+    }$( [ -n "${QUIC_RULES}" ] && echo "," )
+${QUIC_RULES}  ]
 }
 JSONEOF
 fi
@@ -817,7 +838,7 @@ cat > "${CONF_DIR}/config.json" << EOF
       "OutboundConfigPath": "${CONF_DIR}/custom_outbound.json",
       "XrayConnectionConfig": {
         "handshake": 4,
-        "connIdle": 30,
+        "connIdle": 300,
         "uplinkOnly": 2,
         "downlinkOnly": 4,
         "bufferSize": 16
@@ -936,6 +957,37 @@ if [ "${MEM_TOTAL_MB}" -gt 0 ] && [ "${MEM_TOTAL_MB}" -lt 2048 ] && [ "$(awk '/S
     fi
 else
     ok "GOMEMLIMIT=${GOMEMLIMIT_MB}MiB (RAM ${MEM_TOTAL_MB} MB)"
+fi
+
+# ==========================================
+# 4c2. Log + bảng kết nối: chống đầy đĩa, chống nghẽn conntrack
+# ==========================================
+# 26/09/2026: rsyslog Debian chép MỌI dòng access log V2bX ra cả syslog lẫn daemon.log
+# (3–4,5 GB/file/tuần) → .17 đầy đĩa 100 %. Journald đã có trần, chỉ cần chặn rsyslog.
+if [ "${INIT_SYSTEM}" = "systemd" ] && [ -d /etc/rsyslog.d ]; then
+    echo "if \$programname == 'V2bX' then stop" > /etc/rsyslog.d/10-drop-v2bx.conf
+    if [ -f /etc/logrotate.d/rsyslog ] && ! grep -q maxsize /etc/logrotate.d/rsyslog; then
+        sed -i '/{/a\        maxsize 200M' /etc/logrotate.d/rsyslog
+    fi
+    systemctl restart rsyslog 2>/dev/null
+    ok "rsyslog không chép log V2bX (chống đầy đĩa)"
+fi
+# 02–03/10/2026: máy China 800 MB mặc định nf_conntrack_max = 6656 → đo ITDOG liên tục
+# hoặc bị dội kết nối là "table full, dropping packet" + "too many orphaned sockets",
+# khách thật rớt theo. Chỉ NÂNG, không hạ máy đã đặt cao hơn.
+if [ "${INIT_SYSTEM}" = "systemd" ]; then
+    modprobe nf_conntrack 2>/dev/null
+    echo nf_conntrack > /etc/modules-load.d/v2bx-conntrack.conf
+    CT_MAX=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
+    {
+        echo "# V2bX: bang ket noi du cho node proxy (mac dinh may nho chi 6656)"
+        [ "${CT_MAX}" -lt 65536 ] && echo "net.netfilter.nf_conntrack_max = 65536"
+        echo "net.netfilter.nf_conntrack_tcp_timeout_established = 7200"
+        echo "net.ipv4.tcp_orphan_retries = 2"
+        [ "$(cat /proc/sys/net/ipv4/tcp_max_orphans 2>/dev/null || echo 0)" -lt 16384 ] && echo "net.ipv4.tcp_max_orphans = 16384"
+    } > /etc/sysctl.d/92-v2bx-conntrack.conf
+    sysctl -q -p /etc/sysctl.d/92-v2bx-conntrack.conf 2>/dev/null
+    ok "conntrack $(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo '?') · orphan $(cat /proc/sys/net/ipv4/tcp_max_orphans 2>/dev/null)"
 fi
 
 # ==========================================

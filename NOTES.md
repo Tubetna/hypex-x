@@ -449,5 +449,18 @@ UUID tài khoản relay. Đổi sang node **30** (`HXrelayNode=30`, nhóm 66 đ�
 Đo A/B từ CHINA 1, xen kẽ: byte đầu **nhanh hơn ~90 ms mỗi kết nối mới** (YouTube 0,26 → 0,17 s, ChatGPT
 0,21 → 0,12 s — HTTP/2 dùng chung một đường TLS, khỏi bắt tay TCP+WS mỗi lần), tải 31 → 35–36 MB/s, 12 kết nối
 song song ngang nhau. `relay.sh` giờ lấy `mode` XHTTP từ panel (trước ép `packet-up`) và thêm `alpn h2`.
-Đã đổi trên CHINA 1 (×3 máy), CHINA 2, CHINA 5; CHINA 3 (SSH key) còn WS :80. Lưu lượng relay nay hiện ở
+Đã đổi trên CHINA 1 (×3 máy), CHINA 2, CHINA 5; CHINA 3 đổi ngày 28/09 (cùng lúc lên v1.0.9 + thêm nhóm dola). Lưu lượng relay nay hiện ở
 node 30 trên panel thay vì node 33.
+
+## 05/10/2026 — v1.0.11 + bộ cài: connIdle 300, QUIC theo loại node, rsyslog, conntrack
+
+- **v1.0.11** (`limiter`): IP lạ coi là máy đã biết nếu cùng /21 (IPv4 — CGNAT Viettel 116.105.152–154.x,
+  China Mobile 220.205.248–253.x) hoặc cùng /64 / cùng 64 bit đuôi (IPv6 — Viettel đổi dải /64, máy giữ đuôi).
+  Panel `DeviceStateService` đếm cùng quy tắc. Trước sửa `.17` còn ~5.500 `Limited`/ngày.
+- **`connIdle` 30 → 300** trong `config.json` bộ cài sinh: 30 s cắt mọi kết nối im (kênh dài WeChat, app chat),
+  đã nâng tay trên `.17`/`.20` (04/10) và 6 máy China (05/10).
+- **`HXquic=block|allow`** (mặc định `block`): `block` vẫn cho WeChat/Tencent + `geoip:cn` đi QUIC (luật
+  `_tag: hx-wechat-quic`); node sau CloudFront đặt `HXquic=allow` (chặn QUIC làm app thử lại = tốn request).
+- **rsyslog** không chép log V2bX (`/etc/rsyslog.d/10-drop-v2bx.conf` + logrotate `maxsize 200M`) — 26/09 `.17` đầy đĩa.
+- **conntrack/orphan** (`/etc/sysctl.d/92-v2bx-conntrack.conf`): `nf_conntrack_max` ≥ 65536, established 7200 s,
+  `tcp_orphan_retries=2`, `tcp_max_orphans` ≥ 16384 — máy Huawei 800 MB mặc định 6656 bị "table full".
