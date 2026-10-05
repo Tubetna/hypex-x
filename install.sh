@@ -974,20 +974,24 @@ if [ "${INIT_SYSTEM}" = "systemd" ] && [ -d /etc/rsyslog.d ]; then
 fi
 # 02–03/10/2026: máy China 800 MB mặc định nf_conntrack_max = 6656 → đo ITDOG liên tục
 # hoặc bị dội kết nối là "table full, dropping packet" + "too many orphaned sockets",
-# khách thật rớt theo. Chỉ NÂNG, không hạ máy đã đặt cao hơn.
+# khách thật rớt theo. Chỉ NÂNG, không hạ máy đã đặt cao hơn. KHÔNG tự nạp module
+# conntrack: máy không dùng (không có hx-ddos / luật state) thì nạp vào chỉ thêm việc
+# cho kernel — chỉ chỉnh khi module đã có sẵn (hx-ddos nạp nó).
 if [ "${INIT_SYSTEM}" = "systemd" ]; then
-    modprobe nf_conntrack 2>/dev/null
-    echo nf_conntrack > /etc/modules-load.d/v2bx-conntrack.conf
     CT_MAX=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
     {
-        echo "# V2bX: bang ket noi du cho node proxy (mac dinh may nho chi 6656)"
-        [ "${CT_MAX}" -lt 65536 ] && echo "net.netfilter.nf_conntrack_max = 65536"
-        echo "net.netfilter.nf_conntrack_tcp_timeout_established = 7200"
+        echo "# V2bX: orphan + bang ket noi du cho node proxy (mac dinh may nho chi 6656)"
         echo "net.ipv4.tcp_orphan_retries = 2"
         [ "$(cat /proc/sys/net/ipv4/tcp_max_orphans 2>/dev/null || echo 0)" -lt 16384 ] && echo "net.ipv4.tcp_max_orphans = 16384"
+        if [ "${CT_MAX}" -gt 0 ]; then
+            [ "${CT_MAX}" -lt 65536 ] && echo "net.netfilter.nf_conntrack_max = 65536"
+            echo "net.netfilter.nf_conntrack_tcp_timeout_established = 7200"
+        fi
     } > /etc/sysctl.d/92-v2bx-conntrack.conf
+    # module nạp sau sysctl lúc khởi động → nạp sớm để giá trị trên ăn sau reboot
+    [ "${CT_MAX}" -gt 0 ] && echo nf_conntrack > /etc/modules-load.d/v2bx-conntrack.conf
     sysctl -q -p /etc/sysctl.d/92-v2bx-conntrack.conf 2>/dev/null
-    ok "conntrack $(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo '?') · orphan $(cat /proc/sys/net/ipv4/tcp_max_orphans 2>/dev/null)"
+    ok "orphan $(cat /proc/sys/net/ipv4/tcp_max_orphans 2>/dev/null) · conntrack $( [ "${CT_MAX}" -gt 0 ] && cat /proc/sys/net/netfilter/nf_conntrack_max || echo 'không dùng')"
 fi
 
 # ==========================================
