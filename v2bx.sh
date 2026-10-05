@@ -907,8 +907,15 @@ autoupdate_off() {
     systemctl disable --now hyx-autoupdate.timer >/dev/null 2>&1
     echo -e "  ${yellow}○${plain} tự cập nhật: TẮT (cập nhật tay bằng menu 2)"
 }
-autoupdate_next() {   # đọc dạng epoch: `date` bản Rust (Ubuntu 26.04) đọc sai chuỗi "… UTC" → lệch 7 giờ
-    local e; e=$(systemctl show hyx-autoupdate.timer -p NextElapseUSecRealtime --value --timestamp=unix 2>/dev/null | tr -d '@')
+autoupdate_next() {
+    # Đổi ra epoch rồi mới in giờ VN: máy China để múi "CST" (date hiểu nhầm giờ Mỹ), `date` bản Rust (Ubuntu 26.04)
+    # đọc sai chuỗi "… UTC"; systemd < 254 bỏ qua --timestamp=unix → dự phòng: bắt systemd in UTC, date -u đọc.
+    local e t
+    e=$(systemctl show hyx-autoupdate.timer -p NextElapseUSecRealtime --value --timestamp=unix 2>/dev/null | tr -d '@')
+    if ! [[ "$e" =~ ^[0-9]+$ ]]; then
+        t=$(TZ=UTC systemctl show hyx-autoupdate.timer -p NextElapseUSecRealtime --value 2>/dev/null | awk '{print $2" "$3}')
+        e=$(date -u -d "$t" +%s 2>/dev/null)
+    fi
     [[ "$e" =~ ^[0-9]+$ ]] && TZ=Asia/Ho_Chi_Minh date -d "@$e" '+%H:%M %d/%m (giờ VN)' 2>/dev/null || echo "?"
 }
 autoupdate_last() {   # dòng kết quả của lần chạy gần nhất
