@@ -147,7 +147,9 @@ jobs:
       - name: Test + thử chạy binary (linux/amd64)
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         run: |
-          GOEXPERIMENT=jsonv2 go test ./limiter/... ./api/...
+          GOEXPERIMENT=jsonv2 go test ./limiter/...
+          # api/panel dùng encoding/json/v2 → go vet (stdversion) đòi go1.27 dù build vẫn chạy; tắt vet riêng gói này
+          GOEXPERIMENT=jsonv2 go test -vet=off ./api/...
           ./build_assets/V2bX version | tee /tmp/ver.txt
           grep -q -- "$version" /tmp/ver.txt
 
