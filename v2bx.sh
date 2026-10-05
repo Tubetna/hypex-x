@@ -16,33 +16,81 @@ bold='\033[1m'
 dim='\033[2m'
 plain='\033[0m'
 
-# Bảng màu gradient 256-color: xanh ngọc → xanh dương → tím → hồng.
-# MobaXterm/xterm/Windows Terminal đều hiểu; terminal 16 màu thì hạ về cyan.
-GRAD=(51 45 39 33 27 63 99 135 171 207)
-if [ "$(tput colors 2>/dev/null || echo 8)" -lt 256 ]; then GRAD=(36 36 36 34 34 35 35 35 35 35); fi
-g()  { printf '\033[38;5;%sm' "${GRAD[$(( $1 % ${#GRAD[@]} ))]}"; }   # g <i> → mã màu thứ i
+# ── Bảng màu: xanh nước biển nhạt → tím nhạt ──
+# Dãy màu đi rồi quay lại (A→B→A) nên hiệu ứng "chạy màu" vòng tròn liền mạch.
+# Terminal 24-bit (COLORTERM=truecolor, hoặc tự đặt HYX_TRUECOLOR=1) → gradient mịn 16 nấc;
+# còn lại 256 màu pastel; terminal 16 màu thì hạ về cyan/xanh/tím cơ bản.
+ESC=$'\033'; R0="${ESC}[0m"; B1="${ESC}[1m"; D1="${ESC}[2m"
+# Không tin `tput colors`: MobaXterm/PuTTY đặt TERM=xterm (báo 8 màu) nhưng vẽ được 256 màu.
+# Chỉ hạ 16 màu với console thật (linux/vt100/dumb) hoặc khi đặt HYX_COLORS=16.
+case "$TERM" in linux|vt100|vt102|vt220|dumb|ansi|cons25) NCOL=8 ;; *) NCOL=256 ;; esac
+[[ "$HYX_COLORS" =~ ^[0-9]+$ ]] && NCOL=$HYX_COLORS
+GC=(); GB=()   # mã màu chữ / nền dựng sẵn — vẽ từng ký tự khỏi gọi subshell
+if [ -n "$HYX_TRUECOLOR" ] || [[ "$COLORTERM" =~ ^(truecolor|24bit)$ ]]; then
+    # #78DCFF (xanh nước biển nhạt) → #C8A0FF (tím nhạt)
+    for _i in 0 1 2 3 4 5 6 7 8 7 6 5 4 3 2 1; do
+        _rgb="$(( 120 + 80 * _i / 8 ));$(( 220 - 60 * _i / 8 ));255"
+        GC+=("${ESC}[38;2;${_rgb}m"); GB+=("${ESC}[48;2;${_rgb}m")
+    done
+    HLC="${ESC}[1;38;2;255;255;255m"
+    FLC=("${ESC}[38;2;255;245;180m" "${ESC}[38;2;255;205;90m" "${ESC}[38;2;255;150;60m" "${ESC}[38;2;235;95;70m")
+    SMC=("${ESC}[38;2;225;225;240m" "${ESC}[38;2;180;180;200m" "${ESC}[38;2;135;135;155m")
+elif [ "$NCOL" -ge 256 ]; then
+    # 123 #87FFFF · 117 #87D7FF · 111 #87AFFF · 147 #AFAFFF · 141 #AF87FF · 183 #D7AFFF
+    for _c in 123 117 111 147 141 183 141 147 111 117; do
+        GC+=("${ESC}[38;5;${_c}m"); GB+=("${ESC}[48;5;${_c}m")
+    done
+    HLC="${ESC}[1;38;5;231m"
+    FLC=("${ESC}[38;5;229m" "${ESC}[38;5;221m" "${ESC}[38;5;209m" "${ESC}[38;5;203m")
+    SMC=("${ESC}[38;5;254m" "${ESC}[38;5;248m" "${ESC}[38;5;242m")
+else
+    for _c in 6 6 4 4 5 5 5 4 4 6; do GC+=("${ESC}[38;5;${_c}m"); GB+=("${ESC}[48;5;${_c}m"); done
+    HLC="${ESC}[1;37m"
+    FLC=("${ESC}[1;33m" "${ESC}[33m" "${ESC}[1;31m" "${ESC}[31m")
+    SMC=("${ESC}[37m" "${ESC}[37m" "${ESC}[2;37m")
+fi
+NG=${#GC[@]}
+g()  { printf '%s' "${GC[$(( $1 % NG ))]}"; }   # g <i> → mã màu thứ i
 # Tô một chuỗi theo gradient, mỗi ký tự một màu (offset $2 để làm hiệu ứng chạy)
 gtext() {
-    local str="$1" off="${2:-0}" i ch
-    for (( i=0; i<${#str}; i++ )); do
-        ch="${str:$i:1}"; printf '%s%s' "$(g $((i+off)))" "$ch"
-    done; printf '%s' "$plain"
+    local str="$1" off="${2:-0}" i out=""
+    for (( i=0; i<${#str}; i++ )); do out+="${GC[$(( (i + off) % NG ))]}${str:i:1}"; done
+    printf '%s%s' "$out" "$R0"
 }
 # Hiệu ứng: chỉ khi có tty và không đặt HYX_NOANIM (SSH script/cron thì tắt)
 anim_ok() { [ -t 1 ] && [ -z "$HYX_NOANIM" ]; }
-# Spinner: spin "việc đang làm" lệnh... — chạy lệnh nền, quay cho tới khi xong
+# Ngủ ngắn giữa các khung hình; bấm phím bất kỳ → SKIP=1 (bỏ qua phần còn lại của hiệu ứng)
+SKIP=0
+nap() {
+    if [ "$SKIP" = 1 ]; then return 0; fi
+    if [ -t 0 ]; then read -rs -n1 -t "$1" _k && SKIP=1; else sleep "$1"; fi
+    return 0
+}
+cur_off() { anim_ok && printf '%s' "${ESC}[?25l"; }
+cur_on()  { printf '%s' "${ESC}[?25h"; }
+trap 'cur_on' EXIT
+trap 'cur_on; printf "%s\n" "$R0"; exit 130' INT TERM
+# Spinner: spin "việc đang làm" lệnh... — chạy lệnh nền; vòng quay + thanh chạy qua lại + số giây
 SPIN_OUT=/tmp/.hyx_spin.log
 spin() {
     local msg="$1"; shift
     if ! anim_ok; then "$@" >"$SPIN_OUT" 2>&1; return $?; fi
-    local frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0 rc
+    local frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0 rc t0=$SECONDS p k tr
     "$@" >"$SPIN_OUT" 2>&1 & local pid=$!
+    cur_off
     while kill -0 $pid 2>/dev/null; do
-        printf '\r  %s%s%b %s' "$(g $i)" "${frames:$((i%10)):1}" "$plain" "$msg"
-        i=$((i+1)); sleep 0.08
+        p=$(( i % 20 )); [ $p -ge 10 ] && p=$(( 19 - p ))
+        tr=""
+        for (( k=0; k<12; k++ )); do
+            if [ $k -ge $p ] && [ $k -le $(( p + 2 )) ]; then tr+="${GC[$(( (k + i) % NG ))]}━"
+            else tr+="${D1}${GC[$(( k % NG ))]}─${R0}"; fi
+        done
+        printf '\r  %s%s%s %s  %s%s  %s%ds%s\033[K' "${GC[$(( i % NG ))]}" "${frames:$(( i % 10 )):1}" "$R0" \
+            "$msg" "$tr" "$R0" "$D1" $(( SECONDS - t0 )) "$R0"
+        i=$((i+1)); sleep 0.07
     done
     wait $pid; rc=$?
-    printf '\r\033[K'
+    printf '\r\033[K'; cur_on
     return $rc
 }
 # Đọc log có spinner: rlog "<lệnh shell>" — journal node vài trăm MB, mỗi lệnh 2–10 s
@@ -229,11 +277,6 @@ get_reaper_status() {
 #   Giao diện: banner gradient · thẻ trạng thái · menu theo nhóm
 # ══════════════════════════════════════════
 shopt -s extglob
-ESC=$'\033'; R0="${ESC}[0m"; B1="${ESC}[1m"; D1="${ESC}[2m"
-# Mã màu gradient dựng sẵn (chữ / nền) — vẽ từng ký tự không phải gọi subshell
-GC=(); GB=()
-for _c in "${GRAD[@]}"; do GC+=("${ESC}[38;5;${_c}m"); GB+=("${ESC}[48;5;${_c}m"); done
-NG=${#GRAD[@]}
 TERM_W=$(tput cols 2>/dev/null || echo 80); [[ "$TERM_W" =~ ^[0-9]+$ ]] || TERM_W=80
 # W = bề ngang trong hộp (không tính 2 viền). Màn ≥ 70 cột: 3 cột mục, hẹp hơn: 2 cột.
 if [ "$TERM_W" -ge 70 ]; then UI_COLS=3; W=62; else UI_COLS=2; W=$(( TERM_W - 6 )); [ "$W" -lt 44 ] && W=44; fi
@@ -276,13 +319,18 @@ BANNER=(
 "╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝╚═╝  ╚═╝      ╚═╝  ╚═╝"
 )
 BANNER_W=55
+# banner_line <dòng> <lệch màu> <vị trí vệt sáng> <số dòng>
+# Vệt sáng chạy chéo: ký tự có (cột + dòng - hl) trong [-1, 1] tô trắng sáng.
 banner_line() {
-    local s="$1" off="$2" i ch out="" n=${#1}
+    local s="$1" off="$2" hl="${3:--99}" row="${4:-0}" i ch c d out="" n=${#1}
     for (( i=0; i<n; i++ )); do
         ch="${s:i:1}"
-        if [ "$ch" = " " ]; then out+=" "
-        elif [ "$ch" = "█" ]; then out+="${GC[$(( (i * NG / n + off) % NG ))]}${ch}"
-        else out+="${D1}${GC[$(( (i * NG / n + off) % NG ))]}${ch}${R0}"   # bóng đổ ╚═╝ tối hơn
+        if [ "$ch" = " " ]; then out+=" "; continue; fi
+        c="${GC[$(( (i * NG / n + off) % NG ))]}"
+        d=$(( i + row * 2 - hl ))
+        if [ "$d" -ge -1 ] && [ "$d" -le 1 ]; then out+="${HLC}${ch}${R0}"
+        elif [ "$ch" = "█" ]; then out+="${c}${ch}"
+        else out+="${D1}${c}${ch}${R0}"   # bóng đổ ╚═╝ tối hơn
         fi
     done
     printf '%*s%s%s\n' "$(( 2 + (W + 2 - BANNER_W) / 2 ))" '' "$out" "$R0"
@@ -291,17 +339,189 @@ draw_banner() {
     if [ "$TERM_W" -lt $(( BANNER_W + 4 )) ]; then   # màn quá hẹp: chữ gradient thường
         printf '  %s%s%s\n' "$B1" "$(gtext 'HYPEX-X')" "$R0"; return
     fi
-    local r off
-    if [ "$UI_REVEAL" = 1 ]; then
-        for r in "${BANNER[@]}"; do banner_line "$r" 0; sleep 0.04; done
-        # quét sáng: dịch gradient qua chữ rồi về chỗ cũ
-        for off in 1 2 3 4 5 6 7 8 9 0; do
-            printf '\033[%dA' "${#BANNER[@]}"
-            for r in "${BANNER[@]}"; do banner_line "$r" "$off"; done
-            sleep 0.035
+    local r k hl nb=${#BANNER[@]}
+    if [ "$UI_REVEAL" = 1 ] && [ "$SKIP" != 1 ]; then
+        # hiện từng dòng, mỗi dòng màu lệch dần → như sóng đổ xuống
+        for (( k=0; k<nb; k++ )); do banner_line "${BANNER[k]}" $(( nb - k )) -99 "$k"; nap 0.035; done
+        # vệt sáng quét chéo từ trái sang phải, màu trôi theo
+        for (( hl=-12; hl<=BANNER_W + 12; hl+=3 )); do
+            [ "$SKIP" = 1 ] && break
+            printf '\033[%dA' "$nb"
+            for (( k=0; k<nb; k++ )); do banner_line "${BANNER[k]}" $(( (hl + 12) / 6 )) "$hl" "$k"; done
+            nap 0.018
         done
-    else
-        for r in "${BANNER[@]}"; do banner_line "$r" 0; done
+        printf '\033[%dA' "$nb"
+    fi
+    for (( k=0; k<nb; k++ )); do banner_line "${BANNER[k]}" 0 -99 "$k"; done
+}
+
+# ── Cảnh tên lửa phóng (chỉ lần mở đầu, bấm phím bất kỳ để bỏ qua; HYX_NOROCKET=1 để tắt) ──
+# Chỉ dùng ký tự có trong font phổ biến (Consolas, DejaVu, MobaXterm): ▲ ● █ ▄ ▀ ▌ ▐ ░ ▒ ▓ · ∙ +
+ROCKET=(
+"    ▲    "
+"   ▄█▄   "
+"  ▐███▌  "
+"  ▐█●█▌  "
+"  ▐███▌  "
+"  ▐███▌  "
+" ▄▐███▌▄ "
+"▐█▐███▌█▌"
+"▀▀ ▀▀▀ ▀▀"
+)
+FLAME=(   # 4 khung, mỗi khung 3 dòng cách nhau bằng |
+"   ▓█▓   |    ▒    |    ░    "
+"   ▒█▒   |   ░▓░   |    ▒    "
+"   ▓█▓   |   ▒█▒   |   ░▒░   "
+"   ░▓░   |    ▓    |   ░ ░   "
+)
+RK=(); FL=()
+paint_rocket() {   # dựng sẵn chuỗi đã tô màu cho thân + lửa
+    local r i ch c s out f k
+    RK=()
+    for (( r=0; r<${#ROCKET[@]}; r++ )); do
+        s="${ROCKET[r]}"; out=""
+        for (( i=0; i<${#s}; i++ )); do
+            ch="${s:i:1}"
+            case "$ch" in
+                ' ') out+="${R0} " ;;
+                '●') out+="${HLC}●${R0}" ;;
+                '▲') out+="${GC[$(( NG / 2 ))]}▲" ;;
+                '▀') out+="${D1}${GC[$(( (r + i) % NG ))]}▀${R0}" ;;
+                *)   c=$(( (r * NG / 2 / 8 + (i > 4 ? i - 4 : 4 - i)) % NG )); out+="${GC[$c]}${ch}" ;;
+            esac
+        done
+        RK+=("${out}${R0}")
+    done
+    FL=()
+    for f in "${FLAME[@]}"; do
+        for k in 0 1 2; do
+            s=$(cut -d'|' -f$(( k + 1 )) <<<"$f"); out=""
+            for (( i=0; i<${#s}; i++ )); do
+                ch="${s:i:1}"
+                case "$ch" in
+                    '█') out+="${FLC[0]}█" ;; '▓') out+="${FLC[1]}▓" ;;
+                    '▒') out+="${FLC[2]}▒" ;; '░') out+="${FLC[3]}░" ;; *) out+="${R0} " ;;
+                esac
+            done
+            FL+=("${out}${R0}")
+        done
+    done
+}
+# smoke_str <bán kính> <độ tan 0..2> → khói xám ở mặt đất (chiều rộng 2*bk+1)
+smoke_str() {
+    local s=$1 fade=$2 k d out="" ch
+    for (( k=-s; k<=s; k++ )); do
+        d=$(( k < 0 ? -k : k ))
+        if   [ $(( d * 3 )) -le "$s" ] && [ "$fade" -eq 0 ]; then ch="▓"
+        elif [ $(( d * 3 )) -le $(( s * 2 )) ] && [ "$fade" -le 1 ]; then ch="▒"
+        else ch="░"; fi
+        [ "$fade" -ge 2 ] && [ $(( (k + s) % 2 )) -eq 1 ] && ch=" "
+        out+="${SMC[$(( d * 3 / (s + 1) ))]}${ch}"
+    done
+    SMOKE="${out}${R0}"
+}
+rocket_launch() {
+    anim_ok || return 0
+    [ -n "$HYX_NOROCKET" ] && return 0
+    local LN; LN=$(tput lines 2>/dev/null || echo 24); [[ "$LN" =~ ^[0-9]+$ ]] || LN=24
+    [ "$LN" -ge 22 ] && [ "$TERM_W" -ge 44 ] || return 0
+    local H=18 SW=$(( W + 2 )) RC=$(( (W + 2 - 9) / 2 )) blank j r rr k fr top shake
+    local sx=() sy=() sc=() row=() stars='··∙∙·+·∙*·' frame txt tc sm=0 smf=0 v=0 ns=26
+    paint_rocket
+    printf -v blank '%*s' "$SW" ''
+    for (( j=0; j<ns; j++ )); do
+        sx+=($(( RANDOM % SW ))); sy+=($(( RANDOM % H ))); sc+=("${stars:$(( RANDOM % ${#stars} )):1}")
+    done
+    SKIP=0; cur_off
+    printf '\033[H'
+    # khung hình: k < 12 = đếm ngược + đánh lửa (rung), sau đó cất cánh có gia tốc
+    for (( k=0; ; k++ )); do
+        [ "$SKIP" = 1 ] && break
+        if [ $k -lt 12 ]; then
+            top=$(( H - 13 )); shake=$(( k % 2 )); sm=$(( 2 + k / 2 )); smf=0
+            txt=$(( 3 - k / 4 ))
+        else
+            v=$(( k - 12 )); top=$(( H - 13 - v * v / 6 - v )); shake=0
+            sm=$(( 8 + v / 2 )); [ $sm -gt $(( SW / 2 - 2 )) ] && sm=$(( SW / 2 - 2 ))
+            smf=$(( v / 5 )); [ $smf -gt 2 ] && smf=2
+            [ $v -lt 4 ] && txt="CẤT CÁNH!" || txt=""
+            [ $top -lt -14 ] && break
+        fi
+        # sao rơi xuống (nhanh dần khi tên lửa lên)
+        for (( r=0; r<H; r++ )); do row[r]="$blank"; done
+        for (( j=0; j<ns; j++ )); do
+            if [ $k -ge 12 ]; then
+                sy[j]=$(( sy[j] + 1 + v / 4 ))
+                if [ "${sy[j]}" -ge "$H" ]; then sy[j]=$(( sy[j] % H )); sx[j]=$(( RANDOM % SW )); fi
+            fi
+            r=${sy[j]}; row[r]="${row[r]:0:${sx[j]}}${sc[j]}${row[r]:$(( sx[j] + 1 ))}"
+        done
+        fr=$(( (k + RANDOM % 2) % 4 ))
+        smoke_str "$sm" "$smf"
+        frame="${ESC}[H"
+        for (( r=0; r<H; r++ )); do
+            tc="${D1}${GC[$(( (r + k) % NG ))]}"
+            rr=$(( r - top ))
+            if [ $rr -ge 0 ] && [ $rr -lt 9 ]; then
+                frame+="  ${tc}${row[r]:0:$(( RC + shake ))}${R0}${RK[rr]}${tc}${row[r]:$(( RC + shake + 9 ))}${R0}"
+            elif [ $rr -ge 9 ] && [ $rr -lt 12 ]; then
+                frame+="  ${tc}${row[r]:0:$(( RC + shake ))}${R0}${FL[$(( fr * 3 + rr - 9 ))]}${tc}${row[r]:$(( RC + shake + 9 ))}${R0}"
+            elif [ $rr -ge 12 ] && [ $rr -lt 16 ] && [ $k -ge 12 ]; then   # vệt khói sau đuôi
+                frame+="  ${tc}${row[r]:0:$(( RC + 4 ))}${R0}${SMC[$(( (rr - 12) / 2 + 1 ))]}$([ $rr -lt 14 ] && echo '░' || echo '·')${tc}${row[r]:$(( RC + 5 ))}${R0}"
+            elif [ $r -eq $(( H - 1 )) ]; then
+                frame+="  ${tc}${row[r]:0:$(( RC + 4 - sm ))}${R0}${SMOKE}${tc}${row[r]:$(( RC + 5 + sm ))}${R0}"
+            elif [ $r -eq 2 ] && [ -n "$txt" ]; then
+                frame+="  ${tc}${row[r]:0:$(( (SW - ${#txt}) / 2 ))}${R0}${B1}$(gtext "$txt" "$k")${tc}${row[r]:$(( (SW + ${#txt}) / 2 ))}${R0}"
+            else
+                frame+="  ${tc}${row[r]}${R0}"
+            fi
+            frame+="${ESC}[K"$'\n'
+        done
+        printf '%s' "$frame"
+        if [ $k -lt 12 ]; then nap 0.07; else nap 0.04; fi
+    done
+    # xoá từng dòng (không dùng ESC[J từ đầu màn: MobaXterm/PuTTY đẩy cả cảnh vào lịch sử cuộn)
+    frame="${ESC}[H"; for (( r=0; r<=H; r++ )); do frame+="${ESC}[2K"$'\n'; done
+    printf '%s\033[H' "$frame"
+    SKIP=0
+}
+
+# ── Thanh nạp trạng thái: chạy thật từng bước lấy dữ liệu, đầu thanh là tên lửa ──
+load_bar() {   # load_bar <đã xong> <tổng> <nhãn>
+    # bề ngang thanh co theo màn: cả dòng phải vừa 1 hàng, không thì \r chỉ xoá được nửa sau
+    local d=$1 n=$2 bw=$(( TERM_W - 41 )) f i out="" pct
+    [ "$bw" -gt 30 ] && bw=30; [ "$bw" -lt 10 ] && bw=10
+    f=$(( d * bw / n )); pct=$(( d * 100 / n ))
+    for (( i=0; i<bw; i++ )); do
+        if   [ $i -lt $(( f - 3 )) ] || [ "$d" -ge "$n" ]; then out+="${GC[$(( i * NG / bw ))]}█"
+        elif [ $i -lt "$f" ]; then out+="${FLC[$(( 3 - (f - i) ))]}$( [ $(( f - i )) -eq 1 ] && echo '▓' || echo '▒')"
+        elif [ $i -eq "$f" ] && [ "$d" -lt "$n" ]; then out+="${HLC}►"
+        else out+="${D1}${GC[$(( i * NG / bw ))]}·${R0}"; fi
+    done
+    printf '\r  %s%s%s %s│%s%s%s│%s %s%3d%%%s  %s%s%s\033[K' "${GC[$(( d % NG ))]}" "${SPF:$(( d % 10 )):1}" "$R0" \
+        "$D1" "$R0" "$out" "$D1" "$R0" "$B1" "$pct" "$R0" "$D1" "$3" "$R0"
+}
+SPF='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+load_status() {
+    local names=("dịch vụ" "phiên bản" "tự chạy" "node" "tài nguyên" "chứng chỉ" "lớp bảo vệ" "chuyển tiếp VN") n=8 k slow=0
+    [ "$UI_REVEAL" = 1 ] && slow=1
+    for (( k=0; k<n; k++ )); do
+        anim_ok && load_bar "$k" "$n" "Đang nạp ${names[k]}…"
+        case $k in
+            0) S_STATUS=$(get_status) ;;
+            1) S_VER=$(get_version | sed 's/ (.*//') ;;
+            2) S_AUTO=$(card_auto) ;;
+            3) S_NODES=$(get_nodes) ;;
+            4) S_RUN=$(card_runtime) ;;
+            5) S_CERT=$(get_cert_info) ;;
+            6) S_GUARD=$(card_guard) ;;
+            7) S_RELAY=$(card_relay) ;;
+        esac
+        [ "$slow" = 1 ] && nap 0.06
+    done
+    if anim_ok; then
+        load_bar "$n" "$n" "Sẵn sàng"; [ "$slow" = 1 ] && nap 0.3
+        printf '\r\033[K'
     fi
 }
 
@@ -361,20 +581,29 @@ show_header() {
     clear
     detect_arch
     UI_REVEAL=0; [ "$UI_FIRST" = 1 ] && anim_ok && UI_REVEAL=1
+    cur_off
+    [ "$UI_REVEAL" = 1 ] && rocket_launch
     echo ""
     draw_banner
-    local sub="Quản lý node V2bX  ·  lệnh hyx"
-    printf '%*s%b%s%b\n' "$(( 2 + (W + 2 - ${#sub}) / 2 ))" '' "$dim" "$sub" "$plain"
+    local sub="Quản lý node V2bX  ·  lệnh hyx" i
+    printf '%*s' "$(( 2 + (W + 2 - ${#sub}) / 2 ))" ''
+    if [ "$UI_REVEAL" = 1 ] && [ "$SKIP" != 1 ]; then   # chữ phụ gõ dần, màu chạy theo
+        for (( i=0; i<${#sub}; i++ )); do printf '%s%s' "${GC[$(( i * NG / ${#sub} ))]}" "${sub:i:1}"; nap 0.01; done
+        printf '%s\n' "$R0"
+    else
+        printf '%s%s%s\n' "$D1" "$(gtext "$sub")" "$R0"
+    fi
     echo ""
+    load_status
     BROW=0
     hline '╭' '╮' 'TRẠNG THÁI'
-    local nodes; nodes=$(get_nodes); [ ${#nodes} -gt $(( W - 12 )) ] && nodes="${nodes:0:$(( W - 15 ))}…"
-    brow "$(get_status)   ${B1}$(get_version | sed 's/ (.*//')${R0} ${dim}· ${ARCH_SUFFIX:-?}${plain}   $(card_auto)"
+    local nodes="$S_NODES"; [ ${#nodes} -gt $(( W - 12 )) ] && nodes="${nodes:0:$(( W - 15 ))}…"
+    brow "${S_STATUS}   ${B1}${S_VER}${R0} ${dim}· ${ARCH_SUFFIX:-?}${plain}   ${S_AUTO}"
     brow "${dim}Node${plain}  ${yellow}${nodes}${plain}"
-    brow "$(card_runtime)"
-    brow "${dim}Cert${plain}  $(get_cert_info)"
-    brow "$(card_guard)"
-    brow "${dim}Về VN${plain} $(card_relay)"
+    brow "$S_RUN"
+    brow "${dim}Cert${plain}  ${S_CERT}"
+    brow "$S_GUARD"
+    brow "${dim}Về VN${plain} ${S_RELAY}"
     hline '╰' '╯'
 }
 
@@ -418,12 +647,21 @@ draw_menu() {
     printf '  %s %b%s%b\n' "$(pill 0 $(( MENU_TOTAL - 1 )))" "$dim" "${LABEL[0]}" "$plain"
 }
 
-# Hiệu ứng khi chọn mục: chữ chạy màu rồi dừng
+# Tên lửa nhỏ nằm ngang: lửa ░▒▓ → thân █ → mũi ► ; mini_rocket <cột> <khung lửa>
+mini_rocket() {
+    local p=$1 f=$2 pad tail
+    printf -v pad '%*s' "$p" ''
+    case $(( f % 3 )) in 0) tail="${FLC[3]}░${FLC[2]}▒${FLC[1]}▓" ;; 1) tail="${FLC[3]}·${FLC[2]}░${FLC[1]}▒" ;; *) tail="${FLC[2]}░${FLC[1]}▒${FLC[0]}▓" ;; esac
+    printf '\r  %s%s%s██%s►%s\033[K' "$pad" "$tail" "${GC[$(( p % NG ))]}" "$HLC" "$R0"
+}
+# Hiệu ứng khi chọn mục: tên lửa nhỏ bay ngang, rồi tên mục hiện ra màu chạy
 flash() {
-    local t="$1" f
+    local t="$1" f p
     if anim_ok; then
-        for f in 0 1 2 3 4 5 6 7 8 9; do printf '\r  %s▸ %s%s' "${GC[$f]}" "$(gtext "$t" "$f")" "$R0"; sleep 0.025; done
-        printf '\n\n'
+        SKIP=0; cur_off
+        for (( p=0; p<=26; p+=2 )); do mini_rocket "$p" "$p"; nap 0.018; done
+        for (( f=0; f<NG; f++ )); do printf '\r  %s▸ %s%s%s\033[K' "${GC[$f]}" "$B1" "$(gtext "$t" "$f")" "$R0"; nap 0.022; done
+        printf '\n\n'; cur_on
     else
         printf '  ▸ %s\n\n' "$t"
     fi
@@ -437,7 +675,8 @@ show_menu() {
     UI_FIRST=0; UI_REVEAL=0
     echo ""
     local prompt
-    prompt="  ${GC[0]}❯${GC[4]}❯${GC[8]}❯${R0} "
+    prompt="  ${GC[0]}❯${GC[$(( NG / 4 ))]}❯${GC[$(( NG / 2 ))]}❯${R0} "
+    cur_on
     read -r -p "$prompt" choice
     choice="${choice//[[:space:]]/}"
     if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${LABEL[$choice]+x}" ] && [ "$choice" != 0 ]; then flash "${LABEL[$choice]}"; fi
@@ -1325,9 +1564,11 @@ press_any_key() {
 bye() {
     echo ""
     if anim_ok; then
-        local f
-        for f in 0 1 2 3 4 5 6 7 8 9; do printf '\r  %s%s' "$(gtext 'Tạm biệt · hẹn gặp lại!' "$f")" "$R0"; sleep 0.03; done
-        printf '\n\n'
+        local f p end=$(( W - 4 ))
+        SKIP=0; cur_off
+        for (( p=0; p<=end; p+=3 )); do mini_rocket "$p" "$p"; nap 0.016; done   # bay khỏi màn
+        for (( f=0; f<NG; f++ )); do printf '\r  %s▸ %s\033[K' "${GC[$f]}" "$(gtext 'Tạm biệt · hẹn gặp lại!' "$f")"; nap 0.03; done
+        printf '\n\n'; cur_on
     else
         echo "  Tạm biệt!"
     fi
