@@ -225,59 +225,222 @@ get_reaper_status() {
     fi
 }
 
-# ── Header ───────────────────────────────
-HYX_FIRST=1
+# ══════════════════════════════════════════
+#   Giao diện: banner gradient · thẻ trạng thái · menu theo nhóm
+# ══════════════════════════════════════════
+shopt -s extglob
+ESC=$'\033'; R0="${ESC}[0m"; B1="${ESC}[1m"; D1="${ESC}[2m"
+# Mã màu gradient dựng sẵn (chữ / nền) — vẽ từng ký tự không phải gọi subshell
+GC=(); GB=()
+for _c in "${GRAD[@]}"; do GC+=("${ESC}[38;5;${_c}m"); GB+=("${ESC}[48;5;${_c}m"); done
+NG=${#GRAD[@]}
+TERM_W=$(tput cols 2>/dev/null || echo 80); [[ "$TERM_W" =~ ^[0-9]+$ ]] || TERM_W=80
+# W = bề ngang trong hộp (không tính 2 viền). Màn ≥ 70 cột: 3 cột mục, hẹp hơn: 2 cột.
+if [ "$TERM_W" -ge 70 ]; then UI_COLS=3; W=62; else UI_COLS=2; W=$(( TERM_W - 6 )); [ "$W" -lt 44 ] && W=44; fi
+
+# Độ dài HIỂN THỊ (bỏ mã màu thật lẫn dạng chữ \033[..m) → VL
+vlen() {
+    local s="${1//${ESC}\[*([0-9;])m/}"
+    s="${s//\\033\[*([0-9;])m/}"
+    VL=${#s}
+}
+
+# Đường ngang gradient: hline <góc trái> <góc phải> [tiêu đề]
+hline() {
+    local L="$1" R="$2" t="${3:+ $3 }" out i start=0
+    out="${GC[0]}${L}"
+    if [ -n "$t" ]; then out+="─${B1}${ESC}[38;5;255m${t}${R0}"; start=$(( 1 + ${#t} )); fi
+    for (( i=start; i<W; i++ )); do out+="${GC[$(( i * NG / W ))]}─"; done
+    out+="${GC[$((NG-1))]}${R}${R0}"
+    printf '  %s\n' "$out"
+    [ "$UI_REVEAL" = 1 ] && sleep 0.012
+}
+
+# Một dòng trong hộp; viền trái/phải đổi màu theo dòng → gradient dọc
+BROW=0
+brow() {
+    local s="$1" pad
+    vlen "$s"; pad=$(( W - 2 - VL )); [ "$pad" -lt 0 ] && pad=0
+    printf '  %s│%s %b%*s %s│%s\n' "${GC[$(( BROW % NG ))]}" "$R0" "$s" "$pad" '' "${GC[$(( (BROW + 4) % NG ))]}" "$R0"
+    BROW=$(( BROW + 1 ))
+    [ "$UI_REVEAL" = 1 ] && sleep 0.012
+}
+
+# Banner chữ khối (ANSI Shadow) — 55 cột
+BANNER=(
+"██╗  ██╗██╗   ██╗██████╗ ███████╗██╗  ██╗      ██╗  ██╗"
+"██║  ██║╚██╗ ██╔╝██╔══██╗██╔════╝╚██╗██╔╝      ╚██╗██╔╝"
+"███████║ ╚████╔╝ ██████╔╝█████╗   ╚███╔╝ █████╗ ╚███╔╝ "
+"██╔══██║  ╚██╔╝  ██╔═══╝ ██╔══╝   ██╔██╗ ╚════╝ ██╔██╗ "
+"██║  ██║   ██║   ██║     ███████╗██╔╝ ██╗      ██╔╝ ██╗"
+"╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝╚═╝  ╚═╝      ╚═╝  ╚═╝"
+)
+BANNER_W=55
+banner_line() {
+    local s="$1" off="$2" i ch out="" n=${#1}
+    for (( i=0; i<n; i++ )); do
+        ch="${s:i:1}"
+        if [ "$ch" = " " ]; then out+=" "
+        elif [ "$ch" = "█" ]; then out+="${GC[$(( (i * NG / n + off) % NG ))]}${ch}"
+        else out+="${D1}${GC[$(( (i * NG / n + off) % NG ))]}${ch}${R0}"   # bóng đổ ╚═╝ tối hơn
+        fi
+    done
+    printf '%*s%s%s\n' "$(( 2 + (W + 2 - BANNER_W) / 2 ))" '' "$out" "$R0"
+}
+draw_banner() {
+    if [ "$TERM_W" -lt $(( BANNER_W + 4 )) ]; then   # màn quá hẹp: chữ gradient thường
+        printf '  %s%s%s\n' "$B1" "$(gtext 'HYPEX-X')" "$R0"; return
+    fi
+    local r off
+    if [ "$UI_REVEAL" = 1 ]; then
+        for r in "${BANNER[@]}"; do banner_line "$r" 0; sleep 0.04; done
+        # quét sáng: dịch gradient qua chữ rồi về chỗ cũ
+        for off in 1 2 3 4 5 6 7 8 9 0; do
+            printf '\033[%dA' "${#BANNER[@]}"
+            for r in "${BANNER[@]}"; do banner_line "$r" "$off"; done
+            sleep 0.035
+        done
+    else
+        for r in "${BANNER[@]}"; do banner_line "$r" 0; done
+    fi
+}
+
+# ── Trạng thái gọn cho thẻ (không kèm chú thích menu) ──
+ok_mark()  { printf '%b✓%b' "$green" "$plain"; }
+no_mark()  { printf '%b✗%b' "$yellow" "$plain"; }
+fmt_dur() {
+    local s=$1
+    if   [ "$s" -ge 86400 ]; then printf '%dd %dh' $((s/86400)) $((s%86400/3600))
+    elif [ "$s" -ge 3600 ];  then printf '%dh %dm' $((s/3600)) $((s%3600/60))
+    else printf '%dm' $((s/60)); fi
+}
+card_auto() {
+    case "${INIT_SYSTEM}" in
+        systemd) systemctl is-enabled $SERVICE &>/dev/null ;;
+        openrc)  rc-update show default 2>/dev/null | grep -q "$SERVICE" ;;
+        *) false ;;
+    esac && printf '%s tự chạy' "$(ok_mark)" || printf '%s tự chạy %b(9)%b' "$(no_mark)" "$dim" "$plain"
+}
+card_runtime() {
+    local et rss est ld
+    et=$(ps -o etimes= -C V2bX 2>/dev/null | head -1 | tr -d ' ')
+    rss=$(ps -o rss= -C V2bX 2>/dev/null | head -1 | tr -d ' ')
+    est=$(ss -Htn state established 2>/dev/null | wc -l)
+    ld=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
+    if [ -n "$et" ]; then
+        printf '%bChạy%b %s   %bRAM%b %s MB   %bKết nối%b %s   %bTải%b %s' \
+            "$dim" "$plain" "$(fmt_dur "$et")" "$dim" "$plain" "$(( ${rss:-0} / 1024 ))" "$dim" "$plain" "$est" "$dim" "$plain" "$ld"
+    else
+        printf '%bV2bX không chạy%b   %bTải%b %s' "$red" "$plain" "$dim" "$plain" "$ld"
+    fi
+}
+card_guard() {
+    local lim
+    lim=$(grep -oE 'GOMEMLIMIT=[0-9]+MiB' /etc/systemd/system/V2bX.service.d/memory.conf 2>/dev/null | cut -d= -f2)
+    iptables -t mangle -S INPUT 2>/dev/null | grep -q TCPMSS && printf '%s MSS 1400' "$(ok_mark)" || printf '%s MSS' "$(no_mark)"
+    printf '   '
+    [ -n "$lim" ] && printf '%s OOM %s' "$(ok_mark)" "$lim" || printf '%s OOM' "$(no_mark)"
+    printf '   '
+    systemctl is-enabled v2bx-conn-reaper.timer &>/dev/null && printf '%s Dọn KN' "$(ok_mark)" || printf '%s Dọn KN' "$(no_mark)"
+    printf '   '
+    iptables -S HX-DDOS &>/dev/null && printf '%s Chống DDoS' "$(ok_mark)" || printf '%b· DDoS tắt%b' "$dim" "$plain"
+}
+card_relay() {
+    local f=/etc/V2bX/custom_outbound.json a
+    if [ -f "$f" ] && grep -q '"relay-vn"' "$f" 2>/dev/null; then
+        a=$(python3 -c 'import json;o=json.load(open("'"$f"'"));x=[e for e in o if e.get("tag")=="relay-vn"][0]["settings"]["vnext"][0];print("%s:%s"%(x["address"],x["port"]))' 2>/dev/null)
+        printf '%s → %s %b· %s luật%b' "$(ok_mark)" "${a:-?}" "$dim" "$(grep -c '"hx-relay"' /etc/V2bX/route.json 2>/dev/null || echo 0)" "$plain"
+    else
+        printf '%bkhông dùng%b' "$dim" "$plain"
+    fi
+}
+
+# ── Header: banner + thẻ trạng thái ──
+UI_FIRST=1
 show_header() {
     clear
     detect_arch
-    local title='HYX'
-    local sub=' · node V2bX'
-    if [ "$HYX_FIRST" = 1 ] && anim_ok; then
-        # Quét gradient qua chữ 8 khung hình rồi dừng — chỉ lần mở đầu
-        local f
-        for f in 7 6 5 4 3 2 1 0; do
-            printf '\r  %b%b%b%s' "$bold" "$(gtext "$title" $f)" "$dim" "$sub"
-            sleep 0.05
-        done; echo -e "$plain"
+    UI_REVEAL=0; [ "$UI_FIRST" = 1 ] && anim_ok && UI_REVEAL=1
+    echo ""
+    draw_banner
+    local sub="Quản lý node V2bX  ·  lệnh hyx"
+    printf '%*s%b%s%b\n' "$(( 2 + (W + 2 - ${#sub}) / 2 ))" '' "$dim" "$sub" "$plain"
+    echo ""
+    BROW=0
+    hline '╭' '╮' 'TRẠNG THÁI'
+    local nodes; nodes=$(get_nodes); [ ${#nodes} -gt $(( W - 12 )) ] && nodes="${nodes:0:$(( W - 15 ))}…"
+    brow "$(get_status)   ${B1}$(get_version | sed 's/ (.*//')${R0} ${dim}· ${ARCH_SUFFIX:-?}${plain}   $(card_auto)"
+    brow "${dim}Node${plain}  ${yellow}${nodes}${plain}"
+    brow "$(card_runtime)"
+    brow "${dim}Cert${plain}  $(get_cert_info)"
+    brow "$(card_guard)"
+    brow "${dim}Về VN${plain} $(card_relay)"
+    hline '╰' '╯'
+}
+
+# ── Menu theo nhóm. Số mục GIỮ NGUYÊN như bản cũ (quen tay) ──
+declare -A LABEL=(
+    [1]='Cài đặt' [2]='Cập nhật' [3]='Gỡ bỏ' [4]='Bật' [5]='Dừng' [6]='Khởi động lại'
+    [9]='Bật tự chạy' [10]='Tắt tự chạy'
+    [7]='Trạng thái' [8]='Xem log' [14]='Cấu hình' [18]='Giới hạn TB'
+    [11]='BBR' [12]='Mở cổng' [13]='Chặn speedtest' [20]='Ép MSS 1400'
+    [21]='Chống OOM' [22]='Tối ưu mạng' [23]='Dọn KN chết' [24]='Chuyển tiếp VN'
+    [19]='Cert LE' [16]='Cert tự ký' [15]='Khóa X25519' [17]='Cập nhật geo'
+    [0]='Thoát'
+)
+MENU_GROUPS=(
+    'DỊCH VỤ|1 2 3 4 5 6 9 10'
+    'THEO DÕI|7 8 14 18'
+    'MẠNG & HIỆU NĂNG|11 12 13 20 21 22 23 24'
+    'CHỨNG CHỈ & DỮ LIỆU|19 16 15 17'
+)
+MENU_TOTAL=25
+# Nhãn số: nền gradient, chữ đen đậm
+pill() { printf '%s%s%s%3s %s' "${GB[$(( $2 * NG / MENU_TOTAL % NG ))]}" "${B1}" "${ESC}[38;5;16m" "$1" "$R0"; }
+menu_item() {   # menu_item <số> <thứ tự> → "▌ 1  Cài đặt      " đúng bề ngang ô
+    local cell=$(( (W - 2) / UI_COLS )) lbl="${LABEL[$1]}" pad
+    pad=$(( cell - 5 - ${#lbl} )); [ "$pad" -lt 1 ] && pad=1
+    printf '%s %s%*s' "$(pill "$1" "$2")" "$lbl" "$pad" ''
+}
+draw_menu() {
+    local grp title nums n idx=0 line col
+    for grp in "${MENU_GROUPS[@]}"; do
+        title="${grp%%|*}"; nums="${grp#*|}"
+        hline '╭' '╮' "$title"
+        line=""; col=0
+        for n in $nums; do
+            line+="$(menu_item "$n" "$idx")"; idx=$(( idx + 1 )); col=$(( col + 1 ))
+            if [ "$col" -eq "$UI_COLS" ]; then brow "$line"; line=""; col=0; fi
+        done
+        [ -n "$line" ] && brow "$line"
+        hline '╰' '╯'
+    done
+    printf '  %s %b%s%b\n' "$(pill 0 $(( MENU_TOTAL - 1 )))" "$dim" "${LABEL[0]}" "$plain"
+}
+
+# Hiệu ứng khi chọn mục: chữ chạy màu rồi dừng
+flash() {
+    local t="$1" f
+    if anim_ok; then
+        for f in 0 1 2 3 4 5 6 7 8 9; do printf '\r  %s▸ %s%s' "${GC[$f]}" "$(gtext "$t" "$f")" "$R0"; sleep 0.025; done
+        printf '\n\n'
     else
-        echo -e "  ${bold}$(gtext "$title")${dim}${sub}${plain}"
+        printf '  ▸ %s\n\n' "$t"
     fi
-    HYX_FIRST=0
-    echo -e "  $(g 0)────────────────────────────────────────────────────${plain}"
-    echo -e "  $(get_status)  ${dim}$(get_version | sed 's/ (.*//') · ${ARCH_SUFFIX:-?}${plain} · $(get_autostart)"
-    echo -e "  ${dim}Node${plain}  ${yellow}$(get_nodes)${plain}"
-    echo -e "  ${dim}Cert${plain}  $(get_cert_info)"
-    echo -e "  ${dim}MSS ${plain}  $(get_mss_status)"
-    echo -e "  ${dim}RAM ${plain}  $(get_mem_status)"
-    echo -e "  ${dim}Dọn ${plain}  $(get_reaper_status)"
-    echo -e "  ${dim}VN  ${plain}  $(get_relay_status)"
-    echo -e "  $(g 9)────────────────────────────────────────────────────${plain}"
 }
+toast_err() { printf '  %b✗ %s%b\n' "$red" "$1" "$plain"; }
 
-# Một mục menu: số tô gradient, chữ ngắn. Đệm bằng tay theo số ký tự — printf %-Ns
-# đệm theo byte nên chữ có dấu bị hụt, cột lệch.
-m() {
-    local w=${4:-16} pad
-    pad=$(( w - ${#3} )); [ $pad -lt 1 ] && pad=1
-    printf '%s%s%2s%s %s%*s' "$bold" "$(g $1)" "$2" "$plain" "$3" "$pad" ''
-}
-
-# ── Menu chính ───────────────────────────
 show_menu() {
     show_header
-    echo -e "  $(m 0 1 'Cài')$(m 1 2 'Cập nhật')$(m 2 3 'Gỡ')"
-    echo -e "  $(m 3 4 'Bật')$(m 4 5 'Dừng')$(m 5 6 'Khởi động lại')"
-    echo -e "  $(m 6 7 'Trạng thái')$(m 7 8 'Log')$(m 8 14 'Config')"
     echo ""
-    echo -e "  $(m 1 9 'Bật tự chạy')$(m 2 10 'Tắt tự chạy')$(m 3 11 'BBR')"
-    echo -e "  $(m 4 12 'Mở cổng')$(m 5 13 'Chặn speedtest')$(m 6 20 'Ép MSS 1400')"
+    draw_menu
+    UI_FIRST=0; UI_REVEAL=0
     echo ""
-    echo -e "  $(m 7 19 'Cert LE')$(m 8 16 'Cert tự ký')$(m 9 15 'Khóa X25519')"
-    echo -e "  $(m 0 17 'Geo')$(m 1 18 'Giới hạn TB')$(m 2 21 'Chống OOM')"
-    echo -e "  $(m 3 22 'Tối ưu mạng')$(m 4 23 'Dọn KN chết')$(m 5 24 'Chuyển tiếp VN')"
-    echo -e "  $(m 6 0 'Thoát')"
-    echo ""
-    read -p "  ❯ " choice
+    local prompt
+    prompt="  ${GC[0]}❯${GC[4]}❯${GC[8]}❯${R0} "
+    read -r -p "$prompt" choice
+    choice="${choice//[[:space:]]/}"
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ -n "${LABEL[$choice]+x}" ] && [ "$choice" != 0 ]; then flash "${LABEL[$choice]}"; fi
     handle_choice "$choice"
 }
 
@@ -307,8 +470,8 @@ handle_choice() {
     22) tune_net ;;
     23) setup_conn_reaper ;;
     24) setup_relay_vn ;;
-    0)  echo -e "${green}Tạm biệt!${plain}"; exit 0 ;;
-    *)  echo -e "  ${red}Không có mục này.${plain}"; sleep 0.7; show_menu ;;
+    0)  bye ;;
+    *)  toast_err "Không có mục này"; sleep 0.8; show_menu ;;
     esac
 }
 
@@ -1154,8 +1317,21 @@ check_device_limit() {
 
 press_any_key() {
     echo ""
-    read -p "  ${dim}Enter để về menu${plain} " dummy
+    hline '╶' '╴'
+    read -r -p "  ${GC[2]}↵${R0} ${D1}Enter để về menu${R0} " dummy
     show_menu
+}
+
+bye() {
+    echo ""
+    if anim_ok; then
+        local f
+        for f in 0 1 2 3 4 5 6 7 8 9; do printf '\r  %s%s' "$(gtext 'Tạm biệt · hẹn gặp lại!' "$f")" "$R0"; sleep 0.03; done
+        printf '\n\n'
+    else
+        echo "  Tạm biệt!"
+    fi
+    exit 0
 }
 
 # ── Khởi chạy ────────────────────────────
