@@ -926,6 +926,39 @@ EOF
 fi
 
 # ==========================================
+# 4b2. IPv6 hỏng tới panel -> tắt IPv6
+# ==========================================
+# 07/10/2026: máy AWS Lightsail Singapore có IPv6 nhưng IPv6 ra Cloudflare treo (gửi đi,
+# không có trả lời). V2bX ưu tiên IPv6, kết nối treo chứ không báo lỗi nên không lùi về
+# IPv4 -> "context deadline exceeded" khi lấy cấu hình/danh sách khách/gửi lưu lượng.
+# Khách node không dùng IPv6 (tên node chỉ có bản ghi A) nên tắt IPv6 không mất gì.
+# HXipv6=auto (mặc định: thử rồi mới tắt) | keep (không đụng) | off (luôn tắt).
+IPV6_STATE=""
+HXipv6="${HXipv6:-auto}"
+ipv6_disable() {
+    printf 'net.ipv6.conf.all.disable_ipv6=1\nnet.ipv6.conf.default.disable_ipv6=1\nnet.ipv6.conf.lo.disable_ipv6=0\n' \
+        > /etc/sysctl.d/99-hx-noipv6.conf
+    sysctl -q -p /etc/sysctl.d/99-hx-noipv6.conf 2>/dev/null
+}
+if [ "$HXipv6" = off ]; then
+    ipv6_disable; IPV6_STATE="off"; ok "IPv6: đã tắt (HXipv6=off)"
+elif [ "$HXipv6" != keep ] && ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
+    # Chỉ tắt khi IPv6 nối được rồi TREO (curl exit 28): Go không tự lùi IPv4.
+    # IPv6 hỏng nhanh (exit 7, vd 103.5.209.17) thì Go tự lùi IPv4 sau 300 ms → để nguyên.
+    v4=$(curl -4 -s -o /dev/null -m 8 -w '%{http_code}' "${API_HOST}/" 2>/dev/null)
+    v6=$(curl -6 -s -o /dev/null -m 8 -w '%{http_code}' "${API_HOST}/" 2>/dev/null); e6=$?
+    if [ "$v6" = 000 ] && [ "$e6" -eq 28 ]; then
+        v6=$(curl -6 -s -o /dev/null -m 8 -w '%{http_code}' "${API_HOST}/" 2>/dev/null); e6=$?
+    fi
+    if [ "${v4:-000}" != 000 ] && [ "${v6:-000}" = 000 ] && [ "$e6" -eq 28 ]; then
+        ipv6_disable; IPV6_STATE="broken"
+        warn "IPv6 tới panel treo (IPv4 vẫn tới) → đã tắt IPv6, node dùng IPv4"
+    elif [ "${v6:-000}" != 000 ]; then
+        IPV6_STATE="ok"; ok "IPv6 tới panel ổn — giữ nguyên"
+    fi
+fi
+
+# ==========================================
 # 4c. Máy ít RAM: swap + trần bộ nhớ cho Go
 # ==========================================
 # 12/09/2026: máy 1 GB không swap, ~1.500 kết nối đồng thời -> V2bX phình 700-800 MB
@@ -1233,6 +1266,11 @@ if [ "${MSS_OK:-}" = true ]; then
     echo -e "  MSS/MTU        ${green}✓ ép 1400${plain}"
 elif [ "${MSS_OK:-}" = false ]; then
     echo -e "  MSS/MTU        ${yellow}✗ chưa ép${plain}"
+fi
+if [ "${IPV6_STATE:-}" = broken ]; then
+    echo -e "  IPv6           ${yellow}đã tắt (IPv6 tới panel treo)${plain}"
+elif [ "${IPV6_STATE:-}" = off ]; then
+    echo -e "  IPv6           đã tắt (HXipv6=off)"
 fi
 hr
 if [ "$SVC_OK" != true ] || [ "$PANEL_OK" != true ]; then

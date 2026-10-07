@@ -1049,6 +1049,45 @@ hc() {   # hc ok|warn|bad|info "Nhãn" "chi tiết"
     esac
     printf '  %b%s%b %s%*s %b\n' "$c" "$m" "$plain" "$l" $(( 15 - ${#l} )) '' "$3"
 }
+# ── IPv6 tới panel ──
+# 07/10/2026: Lightsail SG có IPv6 nhưng IPv6 ra Cloudflare treo → V2bX (ưu tiên IPv6) lỗi
+# "deadline exceeded" khi gọi panel. Khách node không dùng IPv6 nên tắt là xong.
+panel_host() { grep -oE '"ApiHost": *"[^"]+"' "$CONFIG" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/'; }
+# in: none | ok | broken | unreach | nopanel
+# broken  = IPv6 nối được rồi treo / hết giờ (curl exit 28) → Go KHÔNG tự lùi IPv4 → phải tắt.
+# unreach = IPv6 hỏng nhanh (exit 7, vd .17) → Go tự lùi IPv4 sau 300 ms → vô hại.
+ipv6_probe() {
+    local h v4 v6 e
+    ip -6 addr show scope global 2>/dev/null | grep -q inet6 || { echo none; return; }
+    h=$(panel_host); [ -z "$h" ] && { echo nopanel; return; }
+    v4=$(curl -4 -s -o /dev/null -m 6 -w '%{http_code}' "$h/" 2>/dev/null)
+    v6=$(curl -6 -s -o /dev/null -m 6 -w '%{http_code}' "$h/" 2>/dev/null); e=$?
+    if [ "${v6:-000}" != 000 ]; then echo ok
+    elif [ "${v4:-000}" = 000 ]; then echo nopanel
+    elif [ "$e" -eq 28 ]; then echo broken
+    else echo unreach; fi
+}
+ipv6_off() {
+    printf 'net.ipv6.conf.all.disable_ipv6=1\nnet.ipv6.conf.default.disable_ipv6=1\nnet.ipv6.conf.lo.disable_ipv6=0\n' \
+        > /etc/sysctl.d/99-hx-noipv6.conf
+    sysctl -q -p /etc/sysctl.d/99-hx-noipv6.conf 2>/dev/null
+    echo -e "${green}Đã tắt IPv6 (bền qua reboot: /etc/sysctl.d/99-hx-noipv6.conf). Node gọi panel bằng IPv4.${plain}"
+}
+ipv6_on() {
+    rm -f /etc/sysctl.d/99-hx-noipv6.conf
+    sysctl -q -w net.ipv6.conf.all.disable_ipv6=0 net.ipv6.conf.default.disable_ipv6=0 2>/dev/null
+    echo -e "${yellow}Đã bật lại IPv6. Kiểm: hyx ipv6${plain}"
+}
+ipv6_status() {
+    case "$(ipv6_probe)" in
+        none)    echo "IPv6: không có / đã tắt$([ -f /etc/sysctl.d/99-hx-noipv6.conf ] && echo ' (hyx tắt)')" ;;
+        ok)      echo "IPv6: tới panel ổn" ;;
+        broken)  echo "IPv6: tới panel TREO (IPv4 vẫn tới) → hyx ipv6 off"; return 1 ;;
+        unreach) echo "IPv6: không tới panel nhưng hỏng nhanh — V2bX tự dùng IPv4, không cần làm gì" ;;
+        nopanel) echo "IPv6: không thử được (không tới panel bằng cả IPv4)"; return 1 ;;
+    esac
+}
+
 health_check() {
     local x y z n lat cur ports est act rss lim av sw dk jd old ago ct ctm orp orpm cert days ld cores lim1h top ram
     HC_OK=0; HC_WARN=0; HC_BAD=0
@@ -1078,6 +1117,12 @@ health_check() {
             y=$(journalctl -u "$SERVICE" --since -10min -o cat 2>/dev/null | grep -v accepted | grep -v -i deprecated                 | grep -iE 'level=(error|fatal)|deadline exceeded|i/o timeout|status code: [45][0-9][0-9]' | tail -1 | cut -c1-70)
             hc warn "Panel API" "${x} lỗi/10 phút · ${dim}${y}${plain}"
         fi
+        case "$(ipv6_probe)" in
+            ok)     hc ok "IPv6" "tới panel ổn" ;;
+            broken) hc warn "IPv6" "tới panel treo → V2bX lỗi Panel API · sửa: hyx ipv6 off" ;;
+            none)   hc info "IPv6" "không có / đã tắt" ;;
+            unreach) hc info "IPv6" "không tới panel (hỏng nhanh, V2bX tự dùng IPv4)" ;;
+        esac
         # Chặn thiết bị
         lim1h=$(journalctl -u "$SERVICE" --since -1h --grep Limited -o cat 2>/dev/null | wc -l)
         if [ "$lim1h" -eq 0 ]; then hc ok "Chặn thiết bị" "1 giờ qua 0 lượt"
@@ -1955,6 +2000,7 @@ case "${1:-}" in
     update|-u) case "${2:-}" in --force) do_update force ;; --auto) do_update auto ;; *) do_update yes ;; esac; exit $? ;;
     autoupdate) case "${2:-status}" in on) autoupdate_on ;; off) autoupdate_off ;; *) autoupdate_status ;; esac; exit $? ;;
     check|health) health_check; exit $? ;;
-    help|-h|--help) echo "hyx            mở menu"; echo "hyx update     nâng V2bX (tự lùi nếu hỏng)  ·  hyx update --force"; echo "hyx autoupdate on|off|status   tự cập nhật 03:30 VN"; echo "hyx check      kiểm tra sức khoẻ node"; exit 0 ;;
+    ipv6) case "${2:-status}" in off) ipv6_off ;; on) ipv6_on ;; *) ipv6_status ;; esac; exit $? ;;
+    help|-h|--help) echo "hyx            mở menu"; echo "hyx update     nâng V2bX (tự lùi nếu hỏng)  ·  hyx update --force"; echo "hyx autoupdate on|off|status   tự cập nhật 03:30 VN"; echo "hyx check      kiểm tra sức khoẻ node"; echo "hyx ipv6 off|on|status         tắt IPv6 khi IPv6 tới panel treo"; exit 0 ;;
 esac
 show_menu
