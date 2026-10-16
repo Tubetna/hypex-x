@@ -13,7 +13,7 @@
 #   dùng chung kết nối nên mở kết nối mới còn nhanh hơn WS :80 trần (node 33) ~90 ms (đo 23/09/2026).
 #       RELAY_REMOVE=1 bash relay.sh   (gỡ)
 # Biến tuỳ chọn: RELAY_PORT (mặc định lấy từ panel/80), RELAY_HOST, RELAY_PATH (khi không có
-#   RELAY_NODE), RELAY_SVC="tiktok,youtube,play,vn,dola,ai" (mặc định BẬT hết gồm cả ai; bỏ "ai" để tắt),
+#   RELAY_NODE), RELAY_SVC="tiktok,youtube,play,vn,dola,ig,ai" (mặc định BẬT hết gồm cả ai; bỏ "ai" để tắt),
 #   RELAY_TAG (mặc định relay-vn), CONF_DIR (/etc/V2bX).
 set -u
 CONF_DIR="${CONF_DIR:-/etc/V2bX}"
@@ -92,9 +92,9 @@ fi
 # thì bị 403 `unsupported_country` (SG bị chặn ở chatgpt.com dù api.openai.com cho vào). Đo 23/09/2026:
 # mọi endpoint OpenAI trả mã GIỐNG nhau ở VN (được phép) và SG (bị chặn) qua curl → không có probe đáng tin.
 # Mọi node chạy relay đều là HK/SG và đều cần relay AI (CHINA 4 Nhật không chạy relay nên không dính).
-# Muốn TẮT relay AI: đặt RELAY_SVC/HXrelaySvc tường minh và bỏ "ai" (vd "tiktok,youtube,play,vn,dola").
+# Muốn TẮT relay AI: đặt RELAY_SVC/HXrelaySvc tường minh và bỏ "ai" (vd "tiktok,youtube,play,vn,dola,ig").
 if [ -z "${RELAY_SVC:-}" ]; then
-    RELAY_SVC="tiktok,youtube,play,vn,dola,ai"
+    RELAY_SVC="tiktok,youtube,play,vn,dola,ig,ai"
 fi
 echo -e "  Dịch vụ chuyển tiếp: ${yellow}${RELAY_SVC}${plain}"
 
@@ -120,6 +120,8 @@ L = {
         "ip": ["104.18.32.47", "172.64.155.209", "104.18.39.85", "172.64.148.171", "104.18.41.241", "172.64.146.15", "162.159.140.245", "172.66.0.243", "104.18.41.158", "172.64.146.98", "104.18.33.45", "172.64.154.211", "104.18.39.16", "172.64.148.240"]},
  # Dola (ByteDance Cici đổi tên, 11/2025) chặn vùng HK/SG: "Dola chưa được triển khai ở quốc gia này" (21/09/2026)
  "dola": {"domain": ["domain:dola.com", "domain:cici.com", "domain:ciciai.com"]},
+ # Instagram chọn kho nhạc theo IP: ra IP SG/HK là không có nhạc Việt (16/10/2026). Chỉ API, ảnh/video đi thẳng
+ "ig": {"domain": ["domain:i.instagram.com", "domain:www.instagram.com", "domain:graph.instagram.com"]},
  "vn": {"domain": ["domain:vn", "domain:momo.vn", "domain:zalopay.com", "domain:vnpayqr.com", "domain:napas.com.vn", "domain:viettel.com", "domain:viettelpay.com", "domain:vtcpay.com", "domain:payoo.com", "domain:shopeepay.com", "domain:vpbank.com", "domain:vietcombank.com", "domain:bidv.com", "domain:techcombank.com", "domain:mbbank.com", "domain:acb.com", "domain:tpb.com", "domain:vib.com"]},
 }
 # youtube + play phải cùng lối ra: link tải APK của Play ký theo IP và nằm trên googlevideo.com
