@@ -778,6 +778,8 @@ do_update() {
     cur=$(cur_ver); latest_info; lat="$LAT_TAG"
     echo -e "  Đang chạy ${B1}${cur:-?}${R0}   ·   Mới nhất ${B1}${lat:-không hỏi được GitHub}${R0}"
     if [ "$mode" = auto ]; then
+        # máy đang khoá khẩn cấp (hx-guard): cài bản mới phải khởi động V2bX → bị guard tắt → tưởng hỏng, tự lùi
+        [ -f /run/hx-guard/locked ] && { echo "  máy đang khoá khẩn cấp (bị flood) — để lần sau"; return 0; }
         [ -z "$lat" ] && { echo "  không hỏi được GitHub — để lần sau"; return 0; }
         if [ "$cur" != "$lat" ] && [ "$LAT_AGE" -lt 0 ]; then
             echo "  không đọc được ngày phát hành ${lat} — để lần sau (không tự cài khi chưa chắc đủ 24 giờ)"
@@ -985,10 +987,19 @@ ddos_menu() {
             brow "   ${GC[$(( n % NG ))]}${n}.${R0} ${ip}$([ "$ip" = "$me" ] && echo "  ${green}← bạn đang ở đây${plain}")"
         done
         [ -n "$me" ] && [[ " $ips " != *" $me "* ]] && brow "   ${yellow}! IP bạn đang SSH (${me}) chưa có trong danh sách${plain}"
+        if [ -f /run/hx-guard/locked ]; then
+            brow "${red}● ĐANG KHOÁ KHẨN CẤP${plain} ${dim}— V2bX dừng, máy không nhận kết nối (mở: mục 7)${plain}"
+        elif systemctl is-active -q hx-guard.service 2>/dev/null; then
+            brow "${green}● Canh gác khẩn cấp: bật${plain} ${dim}— bị flood là tự khoá máy, yên thì tự mở${plain}"
+        else
+            brow "${dim}○ Canh gác khẩn cấp: tắt${plain}"
+        fi
         hline '╰' '╯'
         echo ""
         printf '  %s Bật / áp lại   %s Tắt   %s Thêm IP SSH   %s Xoá IP SSH   %s Xem luật   %s Về menu\n' \
             "$(pill 1 0)" "$(pill 2 5)" "$(pill 3 10)" "$(pill 4 15)" "$(pill 5 20)" "$(pill 0 24)"
+        printf '  %s Bật/tắt canh gác khẩn cấp   %s Mở khoá ngay   %s Nhật ký canh gác\n' \
+            "$(pill 6 4)" "$(pill 7 12)" "$(pill 8 18)"
         echo ""
         cur_on; read -rp "  ${GC[0]}❯${GC[$(( NG / 2 ))]}❯${R0} " c
         case "$c" in
@@ -1028,6 +1039,32 @@ ddos_menu() {
             else toast_err "Không có số đó"; sleep 1; fi ;;
         5)
             echo ""; iptables -L HX-DDOS -nv --line-numbers 2>/dev/null || echo "  (chưa bật)"
+            echo ""; read -rp "  Enter để quay lại " x ;;
+        6)
+            ddos_get_script || { toast_err "Không tải được hx-ddos"; sleep 1.5; continue; }
+            if systemctl is-active -q hx-guard.service 2>/dev/null; then
+                read -rp "  Tắt canh gác khẩn cấp? (đang khoá thì mở luôn) [y/N]: " x
+                [[ "$x" =~ ^[yY]$ ]] && "$HXD" guard-off
+            else
+                echo -e "  ${dim}Bị flood (vào rất lớn, ra gần 0) ~20 giây → chặn mọi kết nối, dừng V2bX;"
+                echo -e "  chỉ còn SSH từ danh sách trên. Yên 10 phút thì tự mở (bị lại thì chờ lâu hơn).${plain}"
+                read -rp "  Bật canh gác? [y/N]: " x
+                if [[ "$x" =~ ^[yY]$ ]]; then
+                    [ -n "$me" ] && [[ " $ips " != *" $me "* ]] && { ips="$ips $me"; echo -e "  ${green}+${plain} tự thêm IP của bạn ${me} vào SSH được phép"; }
+                    ddos_conf_set PORT "$port"; ddos_conf_set ALLOW_SSH "$ips"
+                    "$HXD" guard-on
+                fi
+            fi
+            sleep 1.5 ;;
+        7)
+            if [ -f /run/hx-guard/locked ]; then
+                read -rp "  Mở khoá ngay, bật lại V2bX? [y/N]: " x
+                [[ "$x" =~ ^[yY]$ ]] && "$HXD" unlock && echo -e "  ${green}✓${plain} đã mở"
+            else echo -e "  ${dim}Máy không bị khoá.${plain}"; fi
+            sleep 1.2 ;;
+        8)
+            echo ""; [ -x "$HXD" ] && "$HXD" guard-status
+            [ -f /var/log/hx-guard.log ] && { echo ""; tail -20 /var/log/hx-guard.log; }
             echo ""; read -rp "  Enter để quay lại " x ;;
         0|"") show_menu; return ;;
         *) toast_err "Không có mục này"; sleep 0.8 ;;
@@ -1201,6 +1238,9 @@ health_check() {
     x=$(timedatectl show -p NTPSynchronized --value 2>/dev/null)
     [ "$x" = yes ] && hc ok "Đồng bộ giờ" "NTP ổn" || { [ -n "$x" ] && hc warn "Đồng bộ giờ" "chưa đồng bộ NTP — lệch giờ làm hỏng TLS/Reality"; }
     ddos_is_on && hc info "Chống DDoS" "đang bật (menu 25)" || hc info "Chống DDoS" "tắt (menu 25)"
+    if [ -f /run/hx-guard/locked ]; then hc bad "Canh gác khẩn cấp" "ĐANG KHOÁ — V2bX dừng (menu 25 → 7 để mở)"
+    elif systemctl is-active -q hx-guard.service 2>/dev/null; then hc ok "Canh gác khẩn cấp" "bật"
+    else hc info "Canh gác khẩn cấp" "tắt (menu 25 → 6)"; fi
     if autoupdate_is_on; then hc ok "Tự cập nhật" "bật · lần tới $(autoupdate_next)"
     else hc info "Tự cập nhật" "tắt (menu 27)"; fi
     echo ""
