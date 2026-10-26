@@ -17,6 +17,9 @@
 #   China: phần thừa vào − ra cao nhất ~19 Mbit/s, vào ≤ 1,2 lần ra); bị flood thì vào lớn mà ra gần 0. Đủ
 #   GUARD_SAMPLES lượt liên tiếp có (vào − ra ≥ GUARD_EXCESS_MBPS Mbit/s hoặc ≥ GUARD_EXCESS_PPS gói/s) và
 #   vào ≥ GUARD_RATIO10/10 lần ra → KHOÁ: chuỗi HX-LOCK đầu INPUT bỏ im mọi gói (cả ping, máy trông như chết),
+#   Luật gói/s còn đòi byte vào ≥ GUARD_RATIO10/10 lần ra HOẶC gói vào trung bình < GUARD_SMALL_PKT byte: khách tải
+#   nặng có gói vào ~1.100 B còn gói ra được card gộp (TSO) → gói/s vào gấp 6 lần ra dù byte vào ≈ ra (26/10 khoá
+#   nhầm CHINA 2 B: vào 337 / ra 319 Mbit/s, 38.386 / 5.891 gói/s).
 #   chỉ chừa SSH từ ALLOW_SSH + kết nối máy tự mở ra (agent báo panel), dừng V2bX.
 #   Mở lại khi yên liên tục GUARD_HOLD giây (lần khoá thứ k trong 24 h: GUARD_HOLD × 2^(k-1), tối đa 3600).
 #   `lock` tay thì chỉ `unlock` tay mới mở. GUARD_DRYRUN=1: chỉ ghi log "sẽ khoá", không khoá thật.
@@ -31,6 +34,7 @@ GUARD_SAMPLES="${GUARD_SAMPLES:-4}"
 GUARD_EXCESS_MBPS="${GUARD_EXCESS_MBPS:-40}"
 GUARD_EXCESS_PPS="${GUARD_EXCESS_PPS:-30000}"
 GUARD_RATIO10="${GUARD_RATIO10:-15}"    # vào ≥ 1,5 × ra
+GUARD_SMALL_PKT="${GUARD_SMALL_PKT:-300}"   # gói vào TB dưới mức này (byte) = flood gói nhỏ
 GUARD_HOLD="${GUARD_HOLD:-600}"
 GUARD_DRYRUN="${GUARD_DRYRUN:-0}"
 GUARD_DEV_FILE="${GUARD_DEV_FILE:-/proc/net/dev}"   # đổi được để thử bằng số giả
@@ -182,7 +186,7 @@ guard_run() {
     mkdir -p "$GDIR"
     dev="${GUARD_IFACE:-$(guard_iface)}"
     [ -n "$dev" ] || { glog "khong tim thay card mang"; exit 1; }
-    glog "bat canh gac: card $dev, vao-ra >= ${GUARD_EXCESS_MBPS} Mbit/s hoac >= ${GUARD_EXCESS_PPS} goi/s va vao >= ${GUARD_RATIO10}/10 x ra, ${GUARD_SAMPLES}x${GUARD_STEP}s; mo lai khi yen ${GUARD_HOLD}s$([ "$GUARD_DRYRUN" = 1 ] && echo ' — CHAY THU, khong khoa that')"
+    glog "bat canh gac: card $dev, vao-ra >= ${GUARD_EXCESS_MBPS} Mbit/s hoac >= ${GUARD_EXCESS_PPS} goi/s (kem byte vao >= ${GUARD_RATIO10}/10 x ra hoac goi vao < ${GUARD_SMALL_PKT} B) va vao >= ${GUARD_RATIO10}/10 x ra, ${GUARD_SAMPLES}x${GUARD_STEP}s; mo lai khi yen ${GUARD_HOLD}s$([ "$GUARD_DRYRUN" = 1 ] && echo ' — CHAY THU, khong khoa that')"
     read -r rb rp tb tp < <(read_dev "$dev")
     while sleep "$GUARD_STEP"; do
         read -r rb2 rp2 tb2 tp2 < <(read_dev "$dev")
@@ -211,7 +215,9 @@ guard_run() {
 
         flood=0
         [ $((rx_m - tx_m)) -ge "$GUARD_EXCESS_MBPS" ] && [ $((drb * 10)) -ge $((GUARD_RATIO10 * dtb)) ] && flood=1
-        [ $((rx_p - tx_p)) -ge "$GUARD_EXCESS_PPS" ] && [ $((drp * 10)) -ge $((GUARD_RATIO10 * dtp)) ] && flood=1
+        if [ $((rx_p - tx_p)) -ge "$GUARD_EXCESS_PPS" ] && [ $((drp * 10)) -ge $((GUARD_RATIO10 * dtp)) ]; then
+            { [ $((drb * 10)) -ge $((GUARD_RATIO10 * dtb)) ] || [ $drb -lt $((drp * GUARD_SMALL_PKT)) ]; } && flood=1
+        fi
         [ $flood = 1 ] && bad=$((bad + 1)) || bad=0
         if [ $bad -ge "$GUARD_SAMPLES" ]; then
             msg="vao ${rx_m} Mbit/s ${rx_p} goi/s, ra ${tx_m} Mbit/s ${tx_p} goi/s (${bad} luot x ${GUARD_STEP}s)"
