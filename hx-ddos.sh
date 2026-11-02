@@ -21,13 +21,23 @@
 #   nặng có gói vào ~1.100 B còn gói ra được card gộp (TSO) → gói/s vào gấp 6 lần ra dù byte vào ≈ ra (26/10 khoá
 #   nhầm CHINA 2 B: vào 337 / ra 319 Mbit/s, 38.386 / 5.891 gói/s).
 #   chỉ chừa SSH từ ALLOW_SSH + kết nối máy tự mở ra (agent báo panel), dừng V2bX.
+#   Từ 01/11/2026 còn đòi thêm gói LẠ ≥ GUARD_STRANGE_PPS gói/s: gói vào chuỗi HX-DDOS mà không thuộc kết nối
+#   đã có (bỏ qua lo, SSH được phép, ESTABLISHED) — flood thật là gói NEW/INVALID tới cổng node hoặc cổng ngẫu nhiên.
+#   CHINA 1 bị khoá nhầm 3 lần 31/10–01/11: vào 92–122 / ra 22–57 Mbit/s nhưng gần hết là ESTABLISHED (khách tải
+#   UDP/QUIC nặng, đường về TQ nghẽn), dừng V2bX là vào tụt về 0,1 Mbit/s. GUARD_STRANGE_PPS=0 = bỏ điều kiện này.
 #   Mở lại khi yên liên tục GUARD_HOLD giây (lần khoá thứ k trong 24 h: GUARD_HOLD × 2^(k-1), tối đa 3600).
 #   `lock` tay thì chỉ `unlock` tay mới mở. GUARD_DRYRUN=1: chỉ ghi log "sẽ khoá", không khoá thật.
 #   Log: /var/log/hx-guard.log (+ journalctl -t hx-guard).
+#
+# Cổng riêng mỗi khách (01/11/2026): FPORT="20000:29999" trong /etc/hx-ddos.conf → chuỗi nat HX-FPORT chuyển mọi
+#   TCP tới dải này về cổng node (cổng đầu của PORT). Panel cấp mỗi khách 1 cổng trong dải (FakePortService) →
+#   lúc khoá, hx-guard bắt mẫu 3 s bằng tcpdump và ghi "cong bi dap" → tra hx_user_port ra khách làm lộ sub.
+#   Security Group phải mở TCP cả dải. FPORT rỗng = tắt.
 set -u
 CONF=/etc/hx-ddos.conf
 [ -f "$CONF" ] && . "$CONF"
 PORT="${PORT:-3241}"
+FPORT="${FPORT:-}"
 ALLOW_SSH="${ALLOW_SSH:-43.133.42.80 103.5.209.17 103.5.209.20}"
 GUARD_STEP="${GUARD_STEP:-5}"
 GUARD_SAMPLES="${GUARD_SAMPLES:-4}"
@@ -35,6 +45,7 @@ GUARD_EXCESS_MBPS="${GUARD_EXCESS_MBPS:-40}"
 GUARD_EXCESS_PPS="${GUARD_EXCESS_PPS:-30000}"
 GUARD_RATIO10="${GUARD_RATIO10:-15}"    # vào ≥ 1,5 × ra
 GUARD_SMALL_PKT="${GUARD_SMALL_PKT:-300}"   # gói vào TB dưới mức này (byte) = flood gói nhỏ
+GUARD_STRANGE_PPS="${GUARD_STRANGE_PPS:-2000}"   # gói lạ/giây (không thuộc kết nối đã có) tối thiểu để coi là flood
 GUARD_HOLD="${GUARD_HOLD:-600}"
 GUARD_DRYRUN="${GUARD_DRYRUN:-0}"
 GUARD_DEV_FILE="${GUARD_DEV_FILE:-/proc/net/dev}"   # đổi được để thử bằng số giả
@@ -49,6 +60,8 @@ off() {
         while $T -D INPUT -j $C 2>/dev/null; do :; done
         $T -F $C 2>/dev/null; $T -X $C 2>/dev/null
         $T -F HX-SSH 2>/dev/null; $T -X HX-SSH 2>/dev/null
+        while $T -t nat -D PREROUTING -j HX-FPORT 2>/dev/null; do :; done
+        $T -t nat -F HX-FPORT 2>/dev/null; $T -t nat -X HX-FPORT 2>/dev/null
     done
     echo "hx-ddos: da go"
 }
@@ -85,6 +98,12 @@ on() {
         done
         $T -A $C -j DROP
         $T -I INPUT 1 -j $C
+        # dải cổng riêng mỗi khách → cổng node; nat chạy trước INPUT nên luật cổng node ở trên áp luôn cho dải
+        if [ -n "$FPORT" ]; then
+            $T -t nat -N HX-FPORT
+            $T -t nat -A HX-FPORT -p tcp --dport "$FPORT" -j REDIRECT --to-ports "${PORT%% *}"
+            $T -t nat -I PREROUTING 1 -j HX-FPORT
+        fi
         # đang khoá khẩn cấp thì HX-LOCK phải đứng trên HX-DDOS
         if $T -S $L >/dev/null 2>&1; then
             while $T -D INPUT -j $L 2>/dev/null; do :; done
@@ -101,7 +120,7 @@ on() {
         echo nf_conntrack > /etc/modules-load.d/hx-ddos-conntrack.conf
         sysctl -q -p /etc/sysctl.d/93-hx-ddos-conntrack.conf 2>/dev/null
     fi
-    echo "hx-ddos: bat — cong $PORT, SSH tu: $ALLOW_SSH, conntrack $(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null)"
+    echo "hx-ddos: bat — cong $PORT${FPORT:+ (+ dai $FPORT)}, SSH tu: $ALLOW_SSH, conntrack $(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null)"
 }
 
 status() {
@@ -136,6 +155,31 @@ guard_iface() { ip route show default 2>/dev/null | awk '{for (i = 1; i < NF; i+
 read_dev() {
     awk -v d="$1" '{ sub(/^ +/, ""); i = index($0, ":"); if (i && substr($0, 1, i-1) == d) {
         split(substr($0, i+1), f, " "); print f[1], f[2], f[9], f[10]; exit } }' "$GUARD_DEV_FILE"
+}
+
+# Tổng gói LẠ đã vào chuỗi HX-DDOS (v4 + v6): mọi luật trừ lo, SSH, ESTABLISHED; cộng gói SSH lạ bị HX-SSH bỏ.
+# Chuỗi chưa bật → 0 (khi đó điều kiện gói lạ luôn trượt, nên guard_run bỏ qua nó).
+read_strange() {
+    local T s=0 n
+    for T in iptables ip6tables; do
+        command -v $T >/dev/null || continue
+        n=$($T -L $C -v -x -n 2>/dev/null | awk 'NR > 2 && $6 != "lo" && !/dpt:22/ && !/RELATED,ESTABLISHED/ { s += $1 } END { print s + 0 }')
+        s=$((s + n))
+        n=$($T -L HX-SSH -v -x -n 2>/dev/null | awk 'NR > 2 && $3 == "DROP" { s += $1 } END { print s + 0 }')
+        s=$((s + n))
+    done
+    echo "$s"
+}
+
+# Mẫu 3 s gói TCP mới (SYN) tới cổng node + dải FPORT, đếm theo cổng đích (tcpdump bắt ở card, trước nat/lọc)
+guard_ports() {
+    local dev="$1" f
+    command -v tcpdump >/dev/null || return 0
+    # chỉ SYN đi VÀO (bỏ SYN máy tự mở ra ngoài và SYN-ACK trả về — không thì cổng 443/cổng tạm lẫn vào)
+    f="tcp[tcpflags] & (tcp-syn|tcp-ack) == tcp-syn"
+    timeout 3 tcpdump -nn -Q in -i "$dev" -c 20000 "$f" 2>/dev/null \
+        | awk '{ d = $5; sub(/:$/, "", d); n = split(d, a, "."); if (a[n] ~ /^[0-9]+$/) print a[n] }' | sort | uniq -c | sort -rn | head -5 \
+        | awk '{ printf "%s%s (%s goi)", (NR > 1 ? ", " : ""), $2, $1 } END { if (NR) print "" }'
 }
 
 is_locked() { [ -f "$GDIR/locked" ] || iptables -S $L >/dev/null 2>&1; }
@@ -181,22 +225,26 @@ hold_for_new_lock() {   # ghi lần khoá; trả số giây phải yên (lần t
 }
 
 guard_run() {
-    local dev rb rp tb tp rb2 rp2 tb2 tp2 drb drp dtb dtp rx_m tx_m rx_p tx_p flood bad=0 quiet=0
+    local dev rb rp tb tp rb2 rp2 tb2 tp2 drb drp dtb dtp rx_m tx_m rx_p tx_p flood bad=0 quiet=0 sc sc2 st_p
     local since manual hold reason msg
     mkdir -p "$GDIR"
     dev="${GUARD_IFACE:-$(guard_iface)}"
     [ -n "$dev" ] || { glog "khong tim thay card mang"; exit 1; }
-    glog "bat canh gac: card $dev, vao-ra >= ${GUARD_EXCESS_MBPS} Mbit/s hoac >= ${GUARD_EXCESS_PPS} goi/s (kem byte vao >= ${GUARD_RATIO10}/10 x ra hoac goi vao < ${GUARD_SMALL_PKT} B) va vao >= ${GUARD_RATIO10}/10 x ra, ${GUARD_SAMPLES}x${GUARD_STEP}s; mo lai khi yen ${GUARD_HOLD}s$([ "$GUARD_DRYRUN" = 1 ] && echo ' — CHAY THU, khong khoa that')"
+    glog "bat canh gac: card $dev, vao-ra >= ${GUARD_EXCESS_MBPS} Mbit/s hoac >= ${GUARD_EXCESS_PPS} goi/s (kem byte vao >= ${GUARD_RATIO10}/10 x ra hoac goi vao < ${GUARD_SMALL_PKT} B) va vao >= ${GUARD_RATIO10}/10 x ra, goi la >= ${GUARD_STRANGE_PPS}/s, ${GUARD_SAMPLES}x${GUARD_STEP}s; mo lai khi yen ${GUARD_HOLD}s$([ "$GUARD_DRYRUN" = 1 ] && echo ' — CHAY THU, khong khoa that')"
     read -r rb rp tb tp < <(read_dev "$dev")
+    sc=$(read_strange)
     while sleep "$GUARD_STEP"; do
         read -r rb2 rp2 tb2 tp2 < <(read_dev "$dev")
+        sc2=$(read_strange)
+        st_p=$(((sc2 - sc) / GUARD_STEP)); sc=$sc2
+        [ $st_p -lt 0 ] && st_p=0   # chuỗi HX-DDOS vừa dựng lại (hx-ddos on) → bộ đếm về 0
         [ -n "${tp2:-}" ] && [ -n "${tp:-}" ] || { rb=${rb2:-} rp=${rp2:-} tb=${tb2:-} tp=${tp2:-}; continue; }
         drb=$((rb2 - rb)); drp=$((rp2 - rp)); dtb=$((tb2 - tb)); dtp=$((tp2 - tp))
         rb=$rb2 rp=$rp2 tb=$tb2 tp=$tp2
         [ $drb -lt 0 ] || [ $drp -lt 0 ] || [ $dtb -lt 0 ] || [ $dtp -lt 0 ] && continue   # bộ đếm quay vòng / card dựng lại
         rx_m=$((drb * 8 / 1000000 / GUARD_STEP)); tx_m=$((dtb * 8 / 1000000 / GUARD_STEP))
         rx_p=$((drp / GUARD_STEP)); tx_p=$((dtp / GUARD_STEP))
-        echo "$(date +%s) $rx_m $tx_m $rx_p $tx_p" > "$GDIR/last"
+        echo "$(date +%s) $rx_m $tx_m $rx_p $tx_p $st_p" > "$GDIR/last"
 
         if [ -f "$GDIR/locked" ]; then
             read -r since manual hold reason < "$GDIR/locked"
@@ -218,13 +266,16 @@ guard_run() {
         if [ $((rx_p - tx_p)) -ge "$GUARD_EXCESS_PPS" ] && [ $((drp * 10)) -ge $((GUARD_RATIO10 * dtp)) ]; then
             { [ $((drb * 10)) -ge $((GUARD_RATIO10 * dtb)) ] || [ $drb -lt $((drp * GUARD_SMALL_PKT)) ]; } && flood=1
         fi
+        # khách tải nặng cũng làm vào ≫ ra (UDP/QUIC, đường về TQ nghẽn) nhưng toàn gói ESTABLISHED → không phải flood
+        [ "$GUARD_STRANGE_PPS" -gt 0 ] && [ $st_p -lt "$GUARD_STRANGE_PPS" ] && flood=0
         [ $flood = 1 ] && bad=$((bad + 1)) || bad=0
         if [ $bad -ge "$GUARD_SAMPLES" ]; then
-            msg="vao ${rx_m} Mbit/s ${rx_p} goi/s, ra ${tx_m} Mbit/s ${tx_p} goi/s (${bad} luot x ${GUARD_STEP}s)"
+            msg="vao ${rx_m} Mbit/s ${rx_p} goi/s, ra ${tx_m} Mbit/s ${tx_p} goi/s, goi la ${st_p}/s (${bad} luot x ${GUARD_STEP}s)"
             bad=0; quiet=0
             if [ "$GUARD_DRYRUN" = 1 ]; then glog "CHAY THU — se khoa: $msg"; continue; fi
             hold=$(hold_for_new_lock)
             lock_apply "$msg; mo lai khi yen ${hold}s" 0 "$hold"
+            ( p=$(guard_ports "$dev"); [ -n "$p" ] && glog "cong bi dap (SYN 3s): $p" ) &
         fi
     done
 }
@@ -264,11 +315,11 @@ guard_off() {
 }
 
 guard_status() {
-    local t rx tx rp tp since manual hold reason
+    local t rx tx rp tp st since manual hold reason
     systemctl is-active -q hx-guard.service 2>/dev/null && echo "canh gac: BAT" || echo "canh gac: tat"
     if [ -f "$GDIR/last" ]; then
-        read -r t rx tx rp tp < "$GDIR/last"
-        echo "do luc $(date -d @"$t" '+%T'): vao $rx Mbit/s $rp goi/s · ra $tx Mbit/s $tp goi/s"
+        read -r t rx tx rp tp st < "$GDIR/last"
+        echo "do luc $(date -d @"$t" '+%T'): vao $rx Mbit/s $rp goi/s · ra $tx Mbit/s $tp goi/s · goi la ${st:-?}/s"
     fi
     if [ -f "$GDIR/locked" ]; then
         read -r since manual hold reason < "$GDIR/locked"
@@ -285,6 +336,7 @@ case "${1:-status}" in
     guard-on) guard_on ;;
     guard-off) guard_off ;;
     guard-status) guard_status ;;
+    ports) guard_ports "${GUARD_IFACE:-$(guard_iface)}" ;;   # xem tay: cổng nào đang nhận nhiều SYN nhất (3 s)
     lock) lock_apply "khoa tay${2:+: $2}" 1 0 ;;
     unlock) unlock_apply "mo tay" ;;
     boot) install_boot ;;
