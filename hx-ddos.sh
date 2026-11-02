@@ -33,6 +33,11 @@
 #   TCP tới dải này về cổng node (cổng đầu của PORT). Panel cấp mỗi khách 1 cổng trong dải (FakePortService) →
 #   lúc khoá, hx-guard bắt mẫu 3 s bằng tcpdump và ghi "cong bi dap" → tra hx_user_port ra khách làm lộ sub.
 #   Security Group phải mở TCP cả dải. FPORT rỗng = tắt.
+#
+# Báo panel (02/11/2026): khoá tự động → POST https://<ApiHost>/hxguard/push.php (X-Key = ApiKey của V2bX, như
+#   hx-sharescan) kèm số đo + top 5 cổng bị đập; mở lại (sau khoá tự động) → 1 tin nữa. Panel `monitor:guard` tra
+#   cổng ra khách rồi mail admin. Gửi nền, thử lại ~2,5 phút. `hx-ddos guard-test`: thử cả đường (bắt SYN 3 s + gửi
+#   1 tin khoá + 1 tin mở, đánh dấu THỬ) mà KHÔNG khoá máy.
 set -u
 CONF=/etc/hx-ddos.conf
 [ -f "$CONF" ] && . "$CONF"
@@ -172,14 +177,48 @@ read_strange() {
 }
 
 # Mẫu 3 s gói TCP mới (SYN) tới cổng node + dải FPORT, đếm theo cổng đích (tcpdump bắt ở card, trước nat/lọc)
-guard_ports() {
+# → mỗi dòng "số_gói cổng", top 5
+guard_syn() {
     local dev="$1" f
     command -v tcpdump >/dev/null || return 0
     # chỉ SYN đi VÀO (bỏ SYN máy tự mở ra ngoài và SYN-ACK trả về — không thì cổng 443/cổng tạm lẫn vào)
     f="tcp[tcpflags] & (tcp-syn|tcp-ack) == tcp-syn"
     timeout 3 tcpdump -nn -Q in -i "$dev" -c 20000 "$f" 2>/dev/null \
-        | awk '{ d = $5; sub(/:$/, "", d); n = split(d, a, "."); if (a[n] ~ /^[0-9]+$/) print a[n] }' | sort | uniq -c | sort -rn | head -5 \
-        | awk '{ printf "%s%s (%s goi)", (NR > 1 ? ", " : ""), $2, $1 } END { if (NR) print "" }'
+        | awk '{ d = $5; sub(/:$/, "", d); n = split(d, a, "."); if (a[n] ~ /^[0-9]+$/) print a[n] }' | sort | uniq -c | sort -rn | head -5
+}
+fmt_syn() { awk 'NF == 2 { printf "%s%s (%s goi)", (NR > 1 ? ", " : ""), $2, $1 } END { if (NR) print "" }'; }
+guard_ports() { guard_syn "$1" | fmt_syn; }
+
+# Id node trên máy (NodeID trong config V2bX) → "21,22"
+guard_nodes() { grep -oE '"NodeID" *: *[0-9]+' /etc/V2bX/config.json 2>/dev/null | grep -oE '[0-9]+$' | sort -un | paste -sd, -; }
+
+guard_push() {   # guard_push <json> — gửi panel trong nền, thử lại; không bao giờ chặn vòng canh gác
+    local host key
+    host=$(grep -oE '"ApiHost" *: *"[^"]+"' /etc/V2bX/config.json 2>/dev/null | head -1 | sed -E 's/.*"(https?:\/\/)?([^"]+)"$/\2/')
+    key=$(grep -oE '"ApiKey" *: *"[^"]+"' /etc/V2bX/config.json 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+    [ -n "$host" ] && [ -n "$key" ] || { glog "bao panel: thieu ApiHost/ApiKey trong /etc/V2bX/config.json"; return 0; }
+    (
+        r=""
+        for i in 1 2 3 4 5; do
+            r=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' -X POST -H "X-Key: $key" -H "Content-Type: application/json" \
+                --data-binary "$1" "https://${host%/}/hxguard/push.php?h=$(hostname | tr -cd 'A-Za-z0-9._-')" 2>/dev/null)
+            [ "$r" = 200 ] && { glog "bao panel: ok"; exit 0; }
+            # 400/403 = tin hỏng / sai khoá → thử lại cũng vậy
+            case "$r" in 400|403) glog "bao panel: bi tu choi (HTTP $r)"; exit 0 ;; esac
+            sleep $((i * 15))
+        done
+        glog "bao panel: KHONG gui duoc (HTTP ${r:-?})"
+    ) </dev/null >/dev/null 2>&1 &
+}
+
+# guard_alert_lock <card> <vào Mbit/s> <ra Mbit/s> <vào gói/s> <ra gói/s> <gói lạ/s> <giây yên để mở> <1 = thử>
+# Bắt SYN 3 s, ghi "cong bi dap" vào log, báo panel.
+guard_alert_lock() {
+    local syn ports
+    syn=$(guard_syn "$1")
+    [ -n "$syn" ] && glog "cong bi dap (SYN 3s): $(printf '%s\n' "$syn" | fmt_syn)"
+    ports=$(printf '%s\n' "$syn" | awk 'NF == 2 { printf "%s[%s,%s]", (n++ ? "," : ""), $2, $1 }')
+    guard_push "{\"ev\":\"lock\",\"test\":${8:-0},\"nodes\":[$(guard_nodes)],\"rx_m\":$2,\"tx_m\":$3,\"rx_p\":$4,\"tx_p\":$5,\"st_p\":$6,\"hold\":$7,\"secs\":3,\"ports\":[$ports]}"
 }
 
 is_locked() { [ -f "$GDIR/locked" ] || iptables -S $L >/dev/null 2>&1; }
@@ -203,6 +242,9 @@ lock_apply() {   # lock_apply <lý do> <1 = khoá tay> <giây yên để mở>
 }
 
 unlock_apply() {
+    local since=0 manual=1 rest why
+    [ -f "$GDIR/locked" ] && read -r since manual rest < "$GDIR/locked"
+    case "$since" in ''|*[!0-9]*) since=$(date +%s) ;; esac
     for T in iptables ip6tables; do
         command -v $T >/dev/null || continue
         while $T -D INPUT -j $L 2>/dev/null; do :; done
@@ -211,6 +253,11 @@ unlock_apply() {
     rm -f "$GDIR/locked"
     systemctl start V2bX 2>/dev/null
     glog "MO LAI: $1"
+    # khoá tự động mới báo panel đã mở (khoá tay là anh tự làm)
+    if [ "$manual" = 0 ]; then
+        case "$1" in "mo tay") why="mo tay" ;; "tat canh gac") why="tat canh gac" ;; *) why="tu mo" ;; esac
+        guard_push "{\"ev\":\"unlock\",\"nodes\":[$(guard_nodes)],\"for\":$(($(date +%s) - since)),\"why\":\"$why\"}"
+    fi
 }
 
 hold_for_new_lock() {   # ghi lần khoá; trả số giây phải yên (lần thứ k trong 24 h: GUARD_HOLD × 2^(k-1), tối đa 3600)
@@ -275,7 +322,7 @@ guard_run() {
             if [ "$GUARD_DRYRUN" = 1 ]; then glog "CHAY THU — se khoa: $msg"; continue; fi
             hold=$(hold_for_new_lock)
             lock_apply "$msg; mo lai khi yen ${hold}s" 0 "$hold"
-            ( p=$(guard_ports "$dev"); [ -n "$p" ] && glog "cong bi dap (SYN 3s): $p" ) &
+            guard_alert_lock "$dev" "$rx_m" "$tx_m" "$rx_p" "$tx_p" "$st_p" "$hold" 0 &
         fi
     done
 }
@@ -337,6 +384,14 @@ case "${1:-status}" in
     guard-off) guard_off ;;
     guard-status) guard_status ;;
     ports) guard_ports "${GUARD_IFACE:-$(guard_iface)}" ;;   # xem tay: cổng nào đang nhận nhiều SYN nhất (3 s)
+    guard-test)   # thử kênh báo panel: bắt SYN 3 s + 1 tin khoá + 1 tin mở (đánh dấu THỬ), KHÔNG khoá máy
+        rx=0 tx=0 rp=0 tp=0 st=0
+        [ -f "$GDIR/last" ] && read -r _ rx tx rp tp st < "$GDIR/last"
+        guard_alert_lock "${GUARD_IFACE:-$(guard_iface)}" "${rx:-0}" "${tx:-0}" "${rp:-0}" "${tp:-0}" "${st:-0}" "$GUARD_HOLD" 1
+        wait
+        guard_push "{\"ev\":\"unlock\",\"test\":1,\"nodes\":[$(guard_nodes)],\"for\":4,\"why\":\"tu mo\"}"
+        wait
+        tail -3 "$GLOG" ;;
     lock) lock_apply "khoa tay${2:+: $2}" 1 0 ;;
     unlock) unlock_apply "mo tay" ;;
     boot) install_boot ;;
