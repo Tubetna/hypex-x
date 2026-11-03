@@ -34,6 +34,10 @@
 #   lúc khoá, hx-guard bắt mẫu 3 s bằng tcpdump và ghi "cong bi dap" → tra hx_user_port ra khách làm lộ sub.
 #   Security Group phải mở TCP cả dải. FPORT rỗng = tắt.
 #
+# Hysteria2 nhảy cổng (03/11/2026): UPORT="30000:30999" + UPORT_TO="30443" → nhận UDP vào cổng node Hy2 (UPORT_TO,
+#   giới hạn luồng mới mỗi IP) + nat HX-FPORT chuyển mọi UDP trong dải UPORT về UPORT_TO. Security Group phải mở UDP
+#   cả dải. UPORT rỗng = tắt (mọi UDP mới vẫn bị bỏ như cũ).
+#
 # Báo panel (02/11/2026): khoá tự động → POST https://<ApiHost>/hxguard/push.php (X-Key = ApiKey của V2bX, như
 #   hx-sharescan) kèm số đo + top 5 cổng bị đập; mở lại (sau khoá tự động) → 1 tin nữa. Panel `monitor:guard` tra
 #   cổng ra khách rồi mail admin. Gửi nền, thử lại ~2,5 phút. `hx-ddos guard-test`: thử cả đường (bắt SYN 3 s + gửi
@@ -43,6 +47,8 @@ CONF=/etc/hx-ddos.conf
 [ -f "$CONF" ] && . "$CONF"
 PORT="${PORT:-3241}"
 FPORT="${FPORT:-}"
+UPORT="${UPORT:-}"
+UPORT_TO="${UPORT_TO:-}"
 ALLOW_SSH="${ALLOW_SSH:-43.133.42.80 103.5.209.17 103.5.209.20}"
 GUARD_STEP="${GUARD_STEP:-5}"
 GUARD_SAMPLES="${GUARD_SAMPLES:-4}"
@@ -101,12 +107,18 @@ on() {
                 --hashlimit-above 30/second --hashlimit-burst 60 -j DROP
             $T -A $C -p tcp --dport "$P" -j RETURN
         done
+        if [ -n "$UPORT" ] && [ -n "$UPORT_TO" ]; then
+            $T -A $C -p udp --dport "$UPORT_TO" -m conntrack --ctstate NEW -m hashlimit --hashlimit-name "hxu$T" \
+                --hashlimit-mode srcip --hashlimit-above 20/second --hashlimit-burst 40 -j DROP
+            $T -A $C -p udp --dport "$UPORT_TO" -j RETURN
+        fi
         $T -A $C -j DROP
         $T -I INPUT 1 -j $C
         # dải cổng riêng mỗi khách → cổng node; nat chạy trước INPUT nên luật cổng node ở trên áp luôn cho dải
-        if [ -n "$FPORT" ]; then
+        if [ -n "$FPORT" ] || { [ -n "$UPORT" ] && [ -n "$UPORT_TO" ]; }; then
             $T -t nat -N HX-FPORT
-            $T -t nat -A HX-FPORT -p tcp --dport "$FPORT" -j REDIRECT --to-ports "${PORT%% *}"
+            [ -n "$FPORT" ] && $T -t nat -A HX-FPORT -p tcp --dport "$FPORT" -j REDIRECT --to-ports "${PORT%% *}"
+            [ -n "$UPORT" ] && [ -n "$UPORT_TO" ] && $T -t nat -A HX-FPORT -p udp --dport "$UPORT" -j REDIRECT --to-ports "$UPORT_TO"
             $T -t nat -I PREROUTING 1 -j HX-FPORT
         fi
         # đang khoá khẩn cấp thì HX-LOCK phải đứng trên HX-DDOS
@@ -125,7 +137,7 @@ on() {
         echo nf_conntrack > /etc/modules-load.d/hx-ddos-conntrack.conf
         sysctl -q -p /etc/sysctl.d/93-hx-ddos-conntrack.conf 2>/dev/null
     fi
-    echo "hx-ddos: bat — cong $PORT${FPORT:+ (+ dai $FPORT)}, SSH tu: $ALLOW_SSH, conntrack $(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null)"
+    echo "hx-ddos: bat — cong $PORT${FPORT:+ (+ dai $FPORT)}${UPORT:+, UDP $UPORT -> $UPORT_TO}, SSH tu: $ALLOW_SSH, conntrack $(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null)"
 }
 
 status() {
