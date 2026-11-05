@@ -120,8 +120,11 @@ L = {
         "ip": ["104.18.32.47", "172.64.155.209", "104.18.39.85", "172.64.148.171", "104.18.41.241", "172.64.146.15", "162.159.140.245", "172.66.0.243", "104.18.41.158", "172.64.146.98", "104.18.33.45", "172.64.154.211", "104.18.39.16", "172.64.148.240"]},
  # Dola (ByteDance Cici đổi tên, 11/2025) chặn vùng HK/SG: "Dola chưa được triển khai ở quốc gia này" (21/09/2026)
  "dola": {"domain": ["domain:dola.com", "domain:cici.com", "domain:ciciai.com"]},
- # Instagram chọn kho nhạc theo IP: ra IP SG/HK là không có nhạc Việt (16/10/2026). Chỉ API, ảnh/video đi thẳng
- "ig": {"domain": ["domain:i.instagram.com", "domain:www.instagram.com", "domain:graph.instagram.com"]},
+ # Instagram chọn kho nhạc theo IP: ra IP SG/HK là không có nhạc Việt (16/10/2026).
+ # 05/11/2026: moi TOAN BO *.instagram.com -> relay (gồm gateway./test-gateway./i-fallback.), vi
+ # gateway.instagram.com truoc day di thang SG => IG chia doi vung (control VN, gateway SG) => an tinh nang.
+ # Anh/video (cdninstagram.com) van di thang cho nhanh.
+ "ig": {"domain": ["domain:instagram.com"]},
  "vn": {"domain": ["domain:vn", "domain:momo.vn", "domain:zalopay.com", "domain:vnpayqr.com", "domain:napas.com.vn", "domain:viettel.com", "domain:viettelpay.com", "domain:vtcpay.com", "domain:payoo.com", "domain:shopeepay.com", "domain:vpbank.com", "domain:vietcombank.com", "domain:bidv.com", "domain:techcombank.com", "domain:mbbank.com", "domain:acb.com", "domain:tpb.com", "domain:vib.com"]},
 }
 # youtube + play phải cùng lối ra: link tải APK của Play ký theo IP và nằm trên googlevideo.com
